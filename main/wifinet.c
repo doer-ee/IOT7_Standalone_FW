@@ -2,47 +2,24 @@
 #include "main.h"
 #include "wifinet.h"
 #include "esp_http_server.h"
+#include "esp_ota_ops.h"
 #include <stdbool.h>
 #include <stdlib.h>
 
 
 const char *WIFINET = "WIFINET";
 
-xQueueHandle wifinet_evt_queue;
+static QueueHandle_t wifinet_evt_queue;
 
-#if IOT7_ENABLE_LEGACY_MQTT
-esp_mqtt_client_handle_t client;
-char server_url[]="xxx.xxxx.xxx";
-char mqtt_password[]="312c319b9f6c104b1b9d516c0f01ef45";
-char mqtt_tx_topic[]="device_txd/0000000000";
-char mqtt_rx_topic[]="device_rxd/0000000000";
-#endif
 char device_ID[]="0000000000";
 
-uint8_t net_state=0;   //Network state: 0=router disconnected, 1=router connected, 2=server connected
-static const int CONNECTED_BIT = BIT0;
-/* FreeRTOS event group to signal when we are connected & ready to make a request */
-#if IOT7_ENABLE_SMARTCONFIG
-static EventGroupHandle_t s_wifi_event_group;
-
-/* The event group allows multiple bits for each event,
-   but we only care about one event - are we connected
-   to the AP with an IP? */
-static const int ESPTOUCH_DONE_BIT = BIT1;
-
-static void smartconfig_example_task(void * parm);
-#endif
-
-#if IOT7_ENABLE_OPTICAL_PROVISIONING
-uint8_t sen=0;
-uint8_t add=0;
-#endif
-uint8_t progress=0;
+uint8_t net_state=0;   //Network state: 0=router disconnected, 1=router connected
+volatile bool wifi_config_ap_active = false;
 uint8_t wait=0;
-uint8_t time_state=0;
+static uint8_t time_state=0;
 
-char wifi_ssid[32];
-char wifi_pass[64];
+static char wifi_ssid[32];
+static char wifi_pass[64];
 
 #define CONFIG_AP_PASSWORD "iot7setup"
 #define CONFIG_AP_CHANNEL  6
@@ -65,7 +42,6 @@ static esp_err_t status_api_get_handler(httpd_req_t *req);
 static esp_err_t measurement_api_get_handler(httpd_req_t *req);
 static esp_err_t control_api_get_handler(httpd_req_t *req);
 static esp_err_t control_function_post_handler(httpd_req_t *req);
-static esp_err_t control_period_post_handler(httpd_req_t *req);
 static esp_err_t control_hold_post_handler(httpd_req_t *req);
 static esp_err_t control_zero_post_handler(httpd_req_t *req);
 static esp_err_t control_mark_post_handler(httpd_req_t *req);
@@ -74,200 +50,11 @@ static void status_httpd_stop(void);
 static void wifi_apply_task(void *arg);
 static const char *wifi_disconnect_reason_name(uint8_t reason);
 static void wifi_connect_with_log(const char *source);
+static void app_wifi_initialise(void);
+static void wifi_config_ap_start(void);
 
 
-#if IOT7_ENABLE_LEGACY_MQTT
-//Pack data into Data_Buffer
-void DataCombine( uint16_t com, uint8_t sn, uint8_t *data, uint16_t data_len )
-{
-    uint8_t Data_Buffer[2048];
-    uint16_t j = 0;
-    uint16_t i = 0;
-    uint8_t err = 0;
-    uint16_t len = data_len + 18; //Excluding payload; minimum packet length is 18
-    uint8_t checksum = 0; // Checksum
-    uint8_t timeS[4];//4-byte timestamp
-
-    Data_Buffer[j] = 0xAA; // Packet header
-    j++;
-    Data_Buffer[j] = len >> 8; //Packet length high byte
-    j++;
-    Data_Buffer[j] = len & 0xff; //Packet length low byte
-    j++;
-
-    for(i = 0; i < 10; i++) //Hardware ID
-    {
-        Data_Buffer[j] = device_ID[i];
-        j++;
-    }
-
-    Data_Buffer[j] = sn;
-    j++;
-
-    Data_Buffer[j] = com >> 8; //Command type high byte
-    j++;
-    Data_Buffer[j] = com & 0xff; //Command type low byte
-    j++;
-
-    for(i = 0; i < data_len; i++)
-    {
-        Data_Buffer[j] = data[i];
-        j++;
-    }
-
-    Data_Buffer[j] = 0; // Checksum
-    j++;
-
-    Data_Buffer[j] = 0xdd; // Packet terminator
-    j++;
-
-    for(i = 0; i < j; i++) // Calculate checksum
-    {
-        checksum += Data_Buffer[i];
-    }
-
-    Data_Buffer[j - 2] = checksum;
-
-    // if ((client)&&(client->state)) {
-    //     ESP_LOGE(TAG, "Client was not initialized");
-    //     return ESP_ERR_INVALID_ARG;
-    // }
-    if (client) {
-        esp_mqtt_client_publish(client, mqtt_tx_topic, (char *)Data_Buffer, j, 1, 0);
-    }
-}
-
-uint16_t Data_jx_com = 0;
-uint8_t Data_jx_data[512];
-uint16_t Data_jx_len = 0;
-uint8_t Data_rxsn;
-
-//Parse data from Buffer
-uint8_t DataSeparate(uint8_t *Buffer)
-{
-    uint16_t len = 0;
-    uint16_t j = 0;
-    uint8_t he = 0; //Temporary checksum storage
-    uint8_t checksum = 0; // Checksum
-    uint16_t i = 0;
-
-    if(Buffer[j] != 0xAA) //Protocol header is not 0xAA
-    {
-        ESP_LOGI(WIFINET,"error 1\r\n"); 
-        return 0;
-    }
-
-    j++;
-    len = Buffer[j]; //Packet length high byte
-    j++;
-    len <<= 8;
-    len += Buffer[j]; //Packet length low byte
-    j++;
-
-    for (i = 0; i < 10; i++) //Device ID
-    {
-        if (Buffer[j] != device_ID[i]) 
-        {
-            ESP_LOGI(WIFINET,"error 2\r\n"); 
-            return 0; //Incorrect device ID
-        }
-
-        j++;
-    }
-
-    Data_rxsn = Buffer[j];
-    j++;
-
-    Data_jx_com = Buffer[j]; //Command type high byte
-    j++;
-    Data_jx_com <<= 8;
-    Data_jx_com += Buffer[j]; //Command type low byte
-    j++;
-
-    if((len > 500) | (len < 18)) 
-    {
-        ESP_LOGI(WIFINET,"error 3\r\n"); 
-        return 0;
-    }
-
-    Data_jx_len = len - 18; //Payload length
-
-    for(i = 0; i < Data_jx_len; i++) //Extract payload
-    {
-        Data_jx_data[i] = Buffer[j];
-        j++;
-    }
-
-    he = Buffer[len - 2]; //Cache the checksum
-    Buffer[len - 2] = 0; //Clear the checksum
-
-    for(i = 0; i < len; i++)
-    {
-        checksum += Buffer[i];
-    }
-
-    if(he != checksum) //Incorrect checksum
-    {
-       // ESP_LOGI(WIFINET,"error 4\r\n"); 
-        //return 0;
-    }
-
-    if(Buffer[len - 1] != 0xDD) //Protocol terminator is not 0xDD
-    {
-        ESP_LOGI(WIFINET,"error 5\r\n"); 
-        return 0;
-    }
-
-    return 1;
-}
-
-//Convert the meter function ID to the protocol ID
-uint8_t conversion_fun_id(uint8_t fun)
-{
-    switch (fun)
-    {
-        case 0x01:// DC voltage
-            return 0x01;
-        break;
-        case 0x02:// AC voltage
-            return 0x02;
-        break;
-        case 0x03:// DC current in mA
-            return 0x04;
-        break;
-        case 0x04:// DC current in A
-            return 0x05;
-        break;
-        case 0x05:// AC current in mA
-            return 0x06;
-        break;
-        case 0x06:// AC current in A
-            return 0x07;
-        break;
-        case 0x07://Two-wire resistance
-            return 0x08;
-        break;
-        case 0x08://Continuity range
-            return 0x0B;
-        break;
-        case 0x09:// DC power
-            return 0x0C;
-        break;
-        case 0x0A:// AC power
-            return 0x0D;
-        break;
-        case 0x0B:// Diode
-            return 0x0A;
-        break;
-        default:
-        break;
-    }
-    return 0x00;
-}
-#endif
-
-
-void sntp_set_time_sync_callback(struct timeval *tv)
+static void sntp_set_time_sync_callback(struct timeval *tv)
 {
     struct tm timeinfo = {0};
     ESP_LOGI(WIFINET, "tv_sec: %lld", (uint64_t)tv->tv_sec);
@@ -275,8 +62,6 @@ void sntp_set_time_sync_callback(struct timeval *tv)
     ESP_LOGI(WIFINET, "%d %d %d %d:%d:%d", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
              timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     time_state=1;
-    // sntp_stop();
-    // utc_set_time((uint64_t)tv->tv_sec);
 }
 
 static void esp_initialize_sntp(void)
@@ -290,457 +75,20 @@ static void esp_initialize_sntp(void)
 
 	sntp_set_time_sync_notification_cb(&sntp_set_time_sync_callback);
     sntp_init();
-
-
-    // time_t now = 0;
-    // struct tm timeinfo = { 0 };
-    // int retry = 0;
-
-    // while (timeinfo.tm_year < (2022 - 1900)) {
-    //     ESP_LOGD(WIFINET, "Waiting for system time to be set... (%d)", ++retry);
-    //     vTaskDelay(100 / portTICK_PERIOD_MS);
-    //     time(&now);
-    //     localtime_r(&now, &timeinfo);
-    // }
-
-    // // set timezone to China Standard Time
-    // setenv("TZ", "CST-8", 1);
-    // tzset();
-
-    // strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    // ESP_LOGI(WIFINET, "The current date/time in Shanghai is: %s", strftime_buf);
-
 }
 
 
-void start_config_router()
+void request_wifi_config_ap(void)
 {
     net_state=0;
     wait=2;
-    progress=PROG_START;
+    wifi_config_ap_active = true;
     ESP_LOGI(WIFINET,"starting Wi-Fi configuration AP\r\n");
     if (wifi_stack_ready && wifinet_evt_queue != NULL) {
         uint8_t evt = WIFINET_CONFIG_AP;
         xQueueSend(wifinet_evt_queue, &evt, 0);
     }
 }
-
-#if IOT7_ENABLE_OPTICAL_PROVISIONING
-uint8_t ch=0;
-char ls_wifi_ssid[32];
-char ls_wifi_pass[32];
-
-
-void config_router_timer_cb(void *arg) 
-{
-    uint8_t evt;
-    static uint8_t rx_data[70];
-    static uint8_t rx_data_len=0;
-    static uint8_t rx_len=0;
-    static uint8_t rx_ssid_len=0;
-    static uint8_t rx_pass_len=0;
-    uint8_t checksum=0;
-    uint8_t i=0;
-
-
-    if(progress==PROG_START)//Wait for the start signal
-    {
-        if(gpio_get_level(SEN)==0)//White screen = 1
-        {
-            if(++add>=100)//White screen = 1 for one second
-            {
-                add=100;
-            }
-        }
-        else //Black screen = 0
-        {
-            if(add>=100)//Start sending valid bits
-            {
-                esp_timer_stop(config_router_timer_handle);
-                rx_data_len=0;
-                progress=PROG_DATA;
-                vTaskDelay(pdMS_TO_TICKS(50));
-                esp_timer_start_periodic(config_router_timer_handle, 100 * 1000);
-                add=0;
-                ch=0;  
-                ESP_LOGI(WIFINET,"progress=PROG_DATA\r\n");
-            }
-            else
-            {
-                add=0;
-            }
-        }
-    }
-    else if(progress==PROG_DATA)
-    {
-        ch<<=1;
-        if(gpio_get_level(SEN)==0)//White screen = 1
-        {
-            ch|=0x01;
-        }
-        add++;
-        if(add>=8)
-        {
-            rx_data[rx_data_len++]=ch;
-            if((ch==0x00)|(ch==0xFF))
-            {
-                ESP_LOGI(WIFINET,"error 3\r\n"); 
-                esp_timer_stop(config_router_timer_handle);
-                progress=PROG_ERROR;
-            }
-
-            if(rx_data_len==3)
-            {
-                rx_len=rx_data[0];
-                rx_ssid_len=rx_data[1];
-                rx_pass_len=rx_data[2];
-
-                ESP_LOGI(WIFINET,"rx_len=%d\r\n",rx_len); 
-                ESP_LOGI(WIFINET,"rx_ssid_len=%d\r\n",rx_ssid_len); 
-                ESP_LOGI(WIFINET,"rx_pass_len=%d\r\n",rx_pass_len); 
-
-
-                if((rx_len>68)|(rx_ssid_len>32)|(rx_pass_len>32)|(rx_len!=(rx_ssid_len+rx_pass_len+4)))//Payload length validation error
-                {
-                    ESP_LOGI(WIFINET,"error 1\r\n"); 
-                    esp_timer_stop(config_router_timer_handle);
-                    progress=PROG_ERROR; 
-                    beep_start(2);
-                }
-            }
-            ch=0;
-            add=0; 
-        }
-
-        if((rx_data_len>=rx_len)&(rx_data_len>3))
-        {
-            checksum=0;
-            for(i=0;i<(rx_len-1);i++)
-            {
-                checksum+=rx_data[i];
-            }
-            
-            ESP_LOGI(WIFINET,"checksum1=%02x\r\n",checksum); 
-            ESP_LOGI(WIFINET,"checksum2=%02x\r\n",rx_data[(rx_len-1)]); 
-            
-            if(checksum!=rx_data[(rx_len-1)])// Checksum error
-            {
-                ESP_LOGI(WIFINET,"error 2\r\n"); 
-                esp_timer_stop(config_router_timer_handle);
-                progress=PROG_ERROR;  
-                beep_start(2);
-            }
-            else
-            {
-                for(i=0;i<rx_ssid_len;i++)
-                {
-                    ls_wifi_ssid[i]=rx_data[3+i];
-                }
-                ls_wifi_ssid[rx_ssid_len]=0;
-                for(i=0;i<rx_pass_len;i++)
-                {
-                    ls_wifi_pass[i]=rx_data[3+rx_ssid_len+i];
-                }
-                ls_wifi_pass[rx_pass_len]=0;
-
-                ESP_LOGI(WIFINET,"wifi_ssid=%s\r\n",ls_wifi_ssid); 
-                ESP_LOGI(WIFINET,"wifi password received (%u bytes; value hidden)", (unsigned)rx_pass_len);
-                esp_timer_stop(config_router_timer_handle);
-                
-                wifi_connecting_routers();
-                progress=PROG_CONNECTED;
-                beep_start(2);
-                
-                //progress=PROG_OVER;
-            }
-            
-        }
-
-    }
-    
-	//ESP_LOGI(WIFINET,"config_router_timer\r\n"); 
-	
-}  
-esp_timer_handle_t config_router_timer_handle = 0;
-//Define a periodically repeating timer structure
-esp_timer_create_args_t config_router_periodic_arg = {
-        .callback = &config_router_timer_cb, // Callback function
-		.arg = NULL, // No argument
-		.name = "config_router_timer" // Timer name
-		};
-#endif
-
-#if IOT7_ENABLE_SMARTCONFIG
-// In event_handler, perform the corresponding operation for each event.
-static void event_handler(void* arg, esp_event_base_t event_base,
-                               int32_t event_id, void* event_data)
-{
-   if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-       xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
-   } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-       esp_wifi_connect(); // Start connecting to Wi-Fi
-       xEventGroupClearBits(s_wifi_event_group, CONNECTED_BIT);
-   } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-       xEventGroupSetBits(s_wifi_event_group, CONNECTED_BIT);
-   } else if (event_base == SC_EVENT && event_id == SC_EVENT_SCAN_DONE) {
-       ESP_LOGI(WIFINET, "Scan done");
-   } else if (event_base == SC_EVENT && event_id == SC_EVENT_FOUND_CHANNEL) {
-       ESP_LOGI(WIFINET, "Found channel");
-   } else if (event_base == SC_EVENT && event_id == SC_EVENT_GOT_SSID_PSWD) {
-       ESP_LOGI(WIFINET, "Got SSID and password");
-
-       smartconfig_event_got_ssid_pswd_t *evt = (smartconfig_event_got_ssid_pswd_t *)event_data;
-       wifi_config_t wifi_config;
-       uint8_t ssid[33] = { 0 };
-       uint8_t rvd_data[33] = { 0 };
-       bzero(&wifi_config, sizeof(wifi_config_t));
-       memcpy(wifi_config.sta.ssid, evt->ssid, sizeof(wifi_config.sta.ssid));
-       memcpy(wifi_config.sta.password, evt->password, sizeof(wifi_config.sta.password));
-       wifi_config.sta.bssid_set = evt->bssid_set;
-
- if (wifi_config.sta.bssid_set == true) {
-           memcpy(wifi_config.sta.bssid, evt->bssid, sizeof(wifi_config.sta.bssid));
-       }
-       memcpy(ssid, evt->ssid, sizeof(evt->ssid));
-       ESP_LOGI(WIFINET, "SSID:%s", ssid);
-       ESP_LOGI(WIFINET, "SmartConfig password received (value hidden)");
-       if (evt->type == SC_TYPE_ESPTOUCH_V2) {
-           ESP_ERROR_CHECK( esp_smartconfig_get_rvd_data(rvd_data, sizeof(rvd_data)) );
-           ESP_LOGI(WIFINET, "RVD_DATA:");
-           for (int i=0; i<33; i++) {
-               ESP_LOGI(WIFINET,"%02x ", rvd_data[i]);
-           }
-           ESP_LOGI(WIFINET,"\n");
-       }
-       ESP_ERROR_CHECK( esp_wifi_disconnect() );
-       ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-       esp_wifi_connect();
-   } else if (event_base == SC_EVENT && event_id == SC_EVENT_SEND_ACK_DONE) {
-       xEventGroupSetBits(s_wifi_event_group, ESPTOUCH_DONE_BIT);
-   }
-}
-
-
- void initialise_wifi(void)
-{
-    ESP_ERROR_CHECK(esp_netif_init());
-    s_wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
-    assert(sta_netif);
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(SC_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
-}
-
-// Create s_wifi_event_group; set event bits and handle them in the task loop.
-// In smartconfig_example_task, CONNECTED_BIT means the AP is connected and ESPTOUCH_DONE_BIT means SmartConfig is complete.
-static void smartconfig_example_task(void * parm)
-{
-   EventBits_t uxBits;
-   ESP_ERROR_CHECK( esp_smartconfig_set_type(SC_TYPE_ESPTOUCH_AIRKISS) );    // Set the SmartConfig protocol type
-   smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
-   ESP_ERROR_CHECK( esp_smartconfig_start(&cfg) ); //Start one-click SmartConfig provisioning
-   while (1) {
-       uxBits = xEventGroupWaitBits(s_wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY);
-       if(uxBits & CONNECTED_BIT) {
-           ESP_LOGI(WIFINET, "WiFi Connected to ap");
-       }
-       if(uxBits & ESPTOUCH_DONE_BIT) {
-           ESP_LOGI(WIFINET, "smartconfig over");
-           esp_smartconfig_stop();      // Provisioning complete; release the buffer used by esp_smartconfig_start.
-           vTaskDelete(NULL);
-       }
-   }
-}
-#endif
-
-
-
-#if IOT7_ENABLE_LEGACY_MQTT
-static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
-{
-    int msg_id;
-    uint8_t evt=0;
-    uint16_t ls_data=0;
-    uint32_t identifier;
-
-    time_t now;
-    long totalSeconds;
-    uint8_t tx_buf[128];
-    client = event->client;
-    // your_context_t *context = event->context;
-    switch (event->event_id) {
-        case MQTT_EVENT_CONNECTED:
-            net_state=2;
-            msg_id = esp_mqtt_client_subscribe(client, mqtt_rx_topic, 0);
-            ESP_LOGI(WIFINET, "sent subscribe successful, msg_id=%d", msg_id);
-            break;
-        case MQTT_EVENT_DISCONNECTED:
-            ESP_LOGI(WIFINET, "MQTT_EVENT_DISCONNECTED");
-            net_state=1;
-            break;
-        case MQTT_EVENT_SUBSCRIBED:
-            ESP_LOGI(WIFINET, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-            break;
-        case MQTT_EVENT_UNSUBSCRIBED:
-            ESP_LOGI(WIFINET, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
-            break;
-        case MQTT_EVENT_PUBLISHED:
-            //ESP_LOGI(WIFINET, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
-            break;
-        case MQTT_EVENT_DATA: //MQTT message received
-            ESP_LOGI(WIFINET, "MQTT_EVENT_DATA");
-            //ESP_LOGI(WIFINET, "Topic length: %d, data length: %d\n", event->topic_len, event->data_len);
-            //ESP_LOGI(WIFINET,"TOPIC=%.*s\r\n", event->topic_len, event->topic);
-            //ESP_LOGI(WIFINET,"DATA=%.*s\r\n", event->data_len, event->data);
-
-            if(DataSeparate((uint8_t *)event->data) == 1)
-            {
-                ESP_LOGI(WIFINET,"Data_jx_com = 0x%04x\r\n", Data_jx_com);
-                
-                switch(Data_jx_com)
-                {
-                    case 0x0701://Get hardware information
-                        evt=WIFINET_INFO;
-                        xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
-                        break;
-                    case 0x0709://Firmware upgrade
-                         evt=WIFINET_OTA;
-                         xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
-                        break;
-                    case 0x0801://Set meter parameters
-                        beep_start(2);
-          
-                        ls_data=Data_jx_data[0];
-                        ls_data<<=8;
-                        ls_data+=Data_jx_data[1];
-                        if((ls_data!=0xFFFF)&(ls_data>1))
-                        {
-                            control_submit_report_period_100ms(ls_data, NULL);
-
-                        }
-                        if(Data_jx_data[2]!=0xFF)
-                        {
-                            if(Data_jx_data[2]==0x01)
-                            {
-                                control_submit_function(0x01, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x02)
-                            {   
-                                control_submit_function(0x02, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x04)
-                            {  
-                                control_submit_function(0x03, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x05)
-                            {
-                                control_submit_function(0x04, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x06)
-                            {
-                                control_submit_function(0x05, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x07)
-                            {
-                                control_submit_function(0x06, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x08)
-                            {
-                                control_submit_function(0x07, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x0A)
-                            {
-                                control_submit_function(0x0B, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x0B)
-                            {
-                                control_submit_function(0x08, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x0C)
-                            {
-                                control_submit_function(0x09, NULL);
-                            }
-                            else if(Data_jx_data[2]==0x0D)
-                            {
-                                control_submit_function(0x0A, NULL);
-                            }
-                        }  
-                        DataCombine(0x0802,Data_rxsn,NULL,0);
-                        break;
-                    case 0x0803://Query meter parameters
-                        tx_buf[0] = (current_freq>>8)&0xFF;
-                        tx_buf[1] = (current_freq)&0xFF;
-                        tx_buf[2] = conversion_fun_id(current_fun);
-                        DataCombine(0x0804,Data_rxsn,tx_buf,3);
-                        break;
-                    case 0x0806://Request the current meter reading
-                        evt=WIFINET_MVOM;
-                        xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
-                        break;
-                    case 0x0807://Zero the meter
-                        beep_start(2);
-                        control_submit_zero(NULL);
-                        DataCombine(0x0808,Data_rxsn,NULL,0);
-                        break;
-                }
-            }
-           
-            break;
-        case MQTT_EVENT_ERROR:
-            ESP_LOGI(WIFINET, "MQTT_EVENT_ERROR");
-            break;
-        default:
-            ESP_LOGI(WIFINET, "Other event id:%d", event->event_id);
-            break;
-    }
-    return ESP_OK;
-}
-
-static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
-    ESP_LOGD(WIFINET, "Event dispatched from event loop base=%s, event_id=%d", base, event_id);
-    mqtt_event_handler_cb(event_data);
-}
-
-
-static void mqtt_app_start(void)
-{
-    int i=0;
-
-    for(i=0;i<10;i++)
-    {
-        mqtt_tx_topic[i+11]=device_ID[i];
-        mqtt_rx_topic[i+11]=device_ID[i];
-    }
-    
-    esp_mqtt_client_config_t mqtt_cfg = {
-        .host= server_url,
-            .event_handle = mqtt_event_handler_cb,//Legacy callback API; the new event callback is also registered below
-            .keepalive=30,
-            .port = 1883,
-            .username = device_ID,
-			.password = mqtt_password,
-            .client_id = device_ID
-    };
-
-    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
-    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
-    esp_mqtt_client_start(client);
-}
-#endif
-
-
-
-
-static EventGroupHandle_t wifi_event_group;
 
 static const char *wifi_disconnect_reason_name(uint8_t reason)
 {
@@ -794,28 +142,9 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
              
             net_state=1;
 
-            // Once DHCP has completed, expose a read-only local status page
-            // at the station IP.  The page remains available while the
-            // device reconnects and reports the current state through JSON.
+            // Once DHCP completes, expose the local measurement and control UI.
             status_httpd_start();
 
-            if (progress == PROG_CONNECTED) {
-                progress = PROG_CONNECTED_OK;
-            }
-
-#if IOT7_ENABLE_LEGACY_MQTT
-            if (client) {
-                esp_mqtt_client_reconnect(client);
-            }
-            else
-            {
-                mqtt_app_start();
-            }
-#else
-            ESP_LOGI(WIFINET, "Legacy MQTT disabled; local Web UI remains available");
-#endif
-            
-            xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
             if(time_state==0) esp_initialize_sntp();
             break;
         case SYSTEM_EVENT_STA_DISCONNECTED:
@@ -828,16 +157,10 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
                      wifi_disconnect_reason_name(reason),
                      (unsigned)event->event_info.disconnected.ssid_len);
 
-            if(progress==PROG_CONNECTED)
-            {
-                progress=PROG_CONNECTED_ERR;
-            }
-            
             /* This is a workaround as ESP32 WiFi libs don't currently
                auto-reassociate. */
             wifi_connect_with_log("STA_DISCONNECTED");
            net_state=0;
-            xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
             break;
         default:
             break;
@@ -852,11 +175,6 @@ static esp_err_t wifi_stack_init_once(void)
     }
 
     tcpip_adapter_init();
-    wifi_event_group = xEventGroupCreate();
-    if (wifi_event_group == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-
     esp_err_t err = esp_event_loop_init(event_handler2, NULL);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         return err;
@@ -967,8 +285,6 @@ static const char status_page[] =
     "<option value='9'>DC power</option><option value='10'>AC power</option>"
     "<option value='11'>Diode</option></select></label>"
     "<button id='function_button' onclick='setFunction()'>Set function</button>"
-    "<p><label>Report period (ms) <input id='report_period' type='number' min='200' max='6000000' step='100' oninput='controlFormDirty=true'></label>"
-    "<button id='period_button' onclick='setPeriod()'>Set period</button></p>"
     "<p><button id='hold_button' onclick='toggleHold()'>Enable hold</button> "
     "<button id='zero_button' onclick='zeroMeasurement()'>Zero</button> "
     "<button id='mark_button' onclick='markMeasurement()'>Mark</button></p>"
@@ -979,7 +295,7 @@ static const char status_page[] =
     "function battery(v){if(v===254)return 'Charging';if(v===255)return 'Normal';"
     "if(v===0)return 'Low';if(v>=1&&v<=100)return v+'%';return 'Unknown'}"
     "let lastSequence=0,lastTimestamp=0;let controlFormDirty=false;"
-    "let requestedFunction=null,requestedPeriod=null;"
+    "let requestedFunction=null;"
     "function refreshMeasurement(){json('/api/measurement').then(m=>{"
     "text('function',m.function);text('range',m.range_label+' (code '+m.range+')');"
     "text('battery',battery(m.battery));"
@@ -1007,8 +323,6 @@ static const char status_page[] =
     ".then(r=>r.json().then(v=>{if(!r.ok)throw Error(v.error||r.status);return v}))}"
     "function setFunction(){let v=e('control_function').value;requestedFunction=v;controlFormDirty=true;controlPost('/api/control/function','function_id='+encodeURIComponent(v))"
     ".then(v=>text('control_result','Function request '+v.request_id+' accepted')).catch(err=>text('control_result','Function failed: '+err.message))}"
-    "function setPeriod(){let v=e('report_period').value;requestedPeriod=v;controlFormDirty=true;controlPost('/api/control/period','period_ms='+encodeURIComponent(v))"
-    ".then(v=>text('control_result','Period request '+v.request_id+' accepted')).catch(err=>text('control_result','Period failed: '+err.message))}"
     "function toggleHold(){let v=e('hold_button').dataset.enabled==='1'?'0':'1';controlPost('/api/control/hold','enabled='+v)"
     ".then(v=>text('control_result','Hold request '+v.request_id+' accepted')).catch(err=>text('control_result','Hold failed: '+err.message))}"
     "function zeroMeasurement(){if(!confirm('Disconnect external input before zeroing. Continue?'))return;"
@@ -1016,12 +330,10 @@ static const char status_page[] =
     "function markMeasurement(){controlPost('/api/control/mark','').then(v=>text('control_result','Mark request '+v.request_id+' accepted')).catch(err=>text('control_result','Mark failed: '+err.message))}"
     "function refreshControl(){json('/api/control').then(c=>{"
     "if(requestedFunction!==null&&!c.function_pending&&String(c.function_id)===requestedFunction)requestedFunction=null;"
-    "if(requestedPeriod!==null&&String(c.report_period_ms)===requestedPeriod)requestedPeriod=null;"
-    "if(requestedFunction===null&&requestedPeriod===null)controlFormDirty=false;"
+    "if(requestedFunction===null)controlFormDirty=false;"
     "if(!controlFormDirty&&document.activeElement!==e('control_function'))e('control_function').value=c.function_id;"
-    "if(!controlFormDirty&&document.activeElement!==e('report_period'))e('report_period').value=c.report_period_ms;"
     "let busy=c.function_pending||c.zero_pending;"
-    "e('function_button').disabled=busy;e('period_button').disabled=busy;e('zero_button').disabled=c.zero_pending;"
+    "e('function_button').disabled=busy;e('zero_button').disabled=c.zero_pending;"
     "e('mark_button').disabled=!c.sample_available;e('control_function').disabled=busy;"
     "let h=e('hold_button');h.dataset.enabled=c.hold?'1':'0';h.textContent=c.hold?'Release hold':'Enable hold';"
     "text('control_state',c.function_pending?'Changing function...':(c.zero_pending?'Zeroing...':(c.last_command_ok?'Ready':'Last command failed')));"
@@ -1332,14 +644,13 @@ static esp_err_t control_api_get_handler(httpd_req_t *req)
     int length = snprintf(json, sizeof(json),
                           "{\"function_id\":%u,\"function\":\"%s\","
                           "\"range\":%u,\"range_label\":\"%s\","
-                          "\"report_period_ms\":%u,\"hold\":%s,"
+                          "\"hold\":%s,"
                           "\"function_pending\":%s,\"zero_pending\":%s,"
                           "\"last_command_ok\":%s,\"last_mark_sequence\":%u,"
                           "\"request_id\":%u,\"generation\":%u,\"last_error\":%d,"
                           "\"sample_available\":%s}",
                           (unsigned)state.function_id, measurement_function_name(state.function_id),
                           (unsigned)state.range, measurement_range_name(state.range),
-                          (unsigned)state.report_period_100ms * 100U,
                           state.hold ? "true" : "false",
                           state.function_pending ? "true" : "false",
                           state.zero_pending ? "true" : "false",
@@ -1381,24 +692,6 @@ static esp_err_t control_function_post_handler(httpd_req_t *req)
     }
     uint32_t request_id = 0;
     esp_err_t err = control_submit_function(function_id, &request_id);
-    return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
-}
-
-static esp_err_t control_period_post_handler(httpd_req_t *req)
-{
-    char body[64];
-    char value[24];
-    if (control_read_form(req, body, sizeof(body)) != ESP_OK ||
-        !form_get_value(body, "period_ms", value, sizeof(value))) {
-        return control_send_error(req, ESP_ERR_INVALID_ARG);
-    }
-    char *end = NULL;
-    unsigned long parsed = strtoul(value, &end, 10);
-    if (*value == '\0' || end == value || *end != '\0' || parsed > UINT32_MAX) {
-        return control_send_error(req, ESP_ERR_INVALID_ARG);
-    }
-    uint32_t request_id = 0;
-    esp_err_t err = control_submit_report_period_ms((uint32_t)parsed, &request_id);
     return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
 }
 
@@ -1488,12 +781,6 @@ static void status_httpd_start(void)
         .handler = control_function_post_handler,
         .user_ctx = NULL,
     };
-    static const httpd_uri_t control_period_uri = {
-        .uri = "/api/control/period",
-        .method = HTTP_POST,
-        .handler = control_period_post_handler,
-        .user_ctx = NULL,
-    };
     static const httpd_uri_t control_hold_uri = {
         .uri = "/api/control/hold",
         .method = HTTP_POST,
@@ -1517,18 +804,17 @@ static void status_httpd_start(void)
     esp_err_t measurement_err = httpd_register_uri_handler(status_httpd, &measurement_uri);
     esp_err_t control_get_err = httpd_register_uri_handler(status_httpd, &control_get_uri);
     esp_err_t control_function_err = httpd_register_uri_handler(status_httpd, &control_function_uri);
-    esp_err_t control_period_err = httpd_register_uri_handler(status_httpd, &control_period_uri);
     esp_err_t control_hold_err = httpd_register_uri_handler(status_httpd, &control_hold_uri);
     esp_err_t control_zero_err = httpd_register_uri_handler(status_httpd, &control_zero_uri);
     esp_err_t control_mark_err = httpd_register_uri_handler(status_httpd, &control_mark_uri);
     if (page_err != ESP_OK || api_err != ESP_OK || measurement_err != ESP_OK ||
         control_get_err != ESP_OK || control_function_err != ESP_OK ||
-        control_period_err != ESP_OK || control_hold_err != ESP_OK ||
+        control_hold_err != ESP_OK ||
         control_zero_err != ESP_OK || control_mark_err != ESP_OK) {
-        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s control_get=%s function=%s period=%s hold=%s zero=%s mark=%s",
+        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s control_get=%s function=%s hold=%s zero=%s mark=%s",
                  esp_err_to_name(page_err), esp_err_to_name(api_err),
                  esp_err_to_name(measurement_err), esp_err_to_name(control_get_err),
-                 esp_err_to_name(control_function_err), esp_err_to_name(control_period_err),
+                 esp_err_to_name(control_function_err),
                  esp_err_to_name(control_hold_err), esp_err_to_name(control_zero_err),
                  esp_err_to_name(control_mark_err));
         status_httpd_stop();
@@ -1665,7 +951,7 @@ static void wifi_apply_task(void *arg)
     err = esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config);
     ESP_LOGI(WIFINET, "esp_wifi_set_config(STA): %s (0x%x)", esp_err_to_name(err), err);
     ESP_ERROR_CHECK(err);
-    progress = PROG_CONNECTED;
+    wifi_config_ap_active = false;
     net_state = 0;
     wifi_connect_with_log("WEB_SAVE");
     config_apply_started = false;
@@ -1702,20 +988,20 @@ static void wifi_config_ap_start_internal(void)
         ESP_ERROR_CHECK(esp_wifi_start());
         wifi_started = true;
     }
-    progress = PROG_START;
+    wifi_config_ap_active = true;
     net_state = 0;
     ESP_LOGI(WIFINET, "Wi-Fi configuration AP: SSID=%s address=http://192.168.4.1/ (password hidden)",
              ap_ssid);
     config_httpd_start();
 }
 
-void wifi_config_ap_start(void)
+static void wifi_config_ap_start(void)
 {
     wifi_config_ap_start_internal();
 }
 
 // Initialize Wi-Fi STA
-void app_wifi_initialise(void)
+static void app_wifi_initialise(void)
 {
     nvs_handle_t wificonfig_get_handle = 0;
     esp_err_t err;
@@ -1777,54 +1063,17 @@ void app_wifi_initialise(void)
     }
 }
 
-#if IOT7_ENABLE_LEGACY_MQTT
-// Periodically send meter hardware information
-esp_timer_handle_t esp_timer_handle_txinfo = 0;
-/* Timer interrupt callback */
-void esp_timer_txinfo_cb(void *arg){
-    uint8_t evt;
-
-    evt=WIFINET_INFO;
-    xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
-}
-#endif
-
-#if IOT7_ENABLE_OPTICAL_PROVISIONING
-// Connect to the router using the received router credentials
-void wifi_connecting_routers(void)
-{
-    wifi_config_t wifi_config;
-
-    bzero(&wifi_config, sizeof(wifi_config_t));
-    //initialise_wifi();
-    memcpy(wifi_config.sta.ssid, ls_wifi_ssid, sizeof(ls_wifi_ssid));
-    memcpy(wifi_config.sta.password, ls_wifi_pass, sizeof(ls_wifi_pass));
-
-    // Connect to the configured wireless network
-    ESP_ERROR_CHECK( esp_wifi_disconnect() );
-    ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
-    ESP_ERROR_CHECK( esp_wifi_connect() );
-}
-#endif
-
-
-
 void wifinet_task(void *arg)
 {
     uint8_t evt;
-#if IOT7_ENABLE_LEGACY_MQTT
-    time_t now;
-    long totalSeconds;
-    uint8_t tx_buf[128];
-    uint8_t sn_count=0;
-    uint8_t fun=0;
-#endif
-    wifinet_evt_queue = xQueueCreate(3, sizeof(uint8_t));
-#if IOT7_ENABLE_OPTICAL_PROVISIONING
-    esp_timer_create(&config_router_periodic_arg, &config_router_timer_handle);
-#endif
-    while(wait==0)
-    {
+    wifinet_evt_queue = xQueueCreate(3, sizeof(evt));
+    if (wifinet_evt_queue == NULL) {
+        ESP_LOGE(WIFINET, "Failed to create Wi-Fi event queue");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    while (wait == 0) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
     if (wait == 2) {
@@ -1832,101 +1081,11 @@ void wifinet_task(void *arg)
     } else {
         app_wifi_initialise();
     }
-    
 
-#if IOT7_ENABLE_LEGACY_MQTT
-        // Initialize the timer structure
-    esp_timer_create_args_t esp_timer_create_args_txinfo = {
-        .callback = &esp_timer_txinfo_cb, // Timer callback function
-        .arg = NULL, // Callback argument
-        .name = "esp_timer_txinfo" // Timer name
-    };
-
-    /* Create timer */
-    esp_err_t err = esp_timer_create(&esp_timer_create_args_txinfo, &esp_timer_handle_txinfo);
-    err = esp_timer_start_periodic(esp_timer_handle_txinfo, 3000 * 1000);
-#endif
-    while (1) 
-    {
-        if (xQueueReceive(wifinet_evt_queue, &evt, portMAX_DELAY))
-        {
-            switch (evt)
-            {
-                case WIFINET_CONFIG_AP:
-                    wifi_config_ap_start();
-                    break;
-
-#if IOT7_ENABLE_LEGACY_MQTT
-                case WIFINET_INFO: //Send meter information
-
-                    switch (current_fun)
-                    {
-                        fun=0;
-                    }
-                    time(&now);
-                    totalSeconds=(long)now;
-                    //ESP_LOGI(WIFINET,"totalSeconds = %ld\r\n", totalSeconds);
-                    tx_buf[0] = (totalSeconds >> 24) & 0XFF;
-                    tx_buf[1] = (totalSeconds >> 16) & 0XFF;
-                    tx_buf[2] = (totalSeconds >> 8) & 0XFF;
-                    tx_buf[3] = (totalSeconds) & 0XFF;
-                    tx_buf[4] =  ver[0];// Version
-                    tx_buf[5] =  ver[1];// Version
-                    tx_buf[6] =  equipment_type[0];// Device type
-                    tx_buf[7] =  equipment_type[1];// Device type
-                    tx_buf[8] =  electricity_st;// Battery level
-                    tx_buf[9] =  signal_st;// Signal strength
-                    tx_buf[10] =  net_type;// Network type
-                    tx_buf[11] =  fun;// Current function
-                    DataCombine(0x0702,Data_rxsn,tx_buf,12);
-                break;
-
-                case WIFINET_MVOM: //Send meter reading
-                    //ESP_LOGI(WIFINET, "\r\n--------WIFINET_MVOM ---------");
-                    time(&now);
-                    totalSeconds=(long)now;
-                    tx_buf[0] = (current_freq>>8)&0xFF;
-                    tx_buf[1] = (current_freq)&0xFF;
-                    tx_buf[2]=conversion_fun_id(current_fun);
-                    tx_buf[3]=sign;
-                    tx_buf[4] = (measured_value >> 24) & 0XFF;
-                    tx_buf[5] = (measured_value >> 16) & 0XFF;
-                    tx_buf[6] = (measured_value >> 8) & 0XFF;
-                    tx_buf[7] = (measured_value) & 0XFF;
-                    tx_buf[8] =  unit;
-                    tx_buf[9] = (totalSeconds >> 24) & 0XFF;
-                    tx_buf[10] = (totalSeconds >> 16) & 0XFF;
-                    tx_buf[11] = (totalSeconds >> 8) & 0XFF;
-                    tx_buf[12] = (totalSeconds) & 0XFF;
-                    DataCombine(0x0805,sn_count++,tx_buf,13);   
-                break;
-
-                case WIFINET_MQTTSTOP: //Disconnect MQTT
-                esp_mqtt_client_stop(client);
-                vTaskDelay(pdMS_TO_TICKS(500));
-                esp_mqtt_client_stop(client);
-                vTaskDelay(pdMS_TO_TICKS(500));
-                esp_mqtt_client_stop(client);
-                break;
-
-                case WIFINET_MARK: //Mark the meter reading
-                    tx_buf[0]=0x01;
-                    DataCombine(0x080B,sn_count++,tx_buf,1);
-                break;
-#if IOT7_ENABLE_CLOUD_OTA
-                case WIFINET_OTA: // Firmware upgrade
-                     xTaskCreate(&ota_task, "ota_task", 1024 * 8, NULL, 20, NULL);
-                break;
-
-                case WIFINET_OTA_PRO: // Firmware upgrade progress
-                    tx_buf[0]=percentage;
-                    DataCombine(0x070A,sn_count++,tx_buf,1);
-                break;
-#endif
-#endif
-            }
-            
+    while (true) {
+        if (xQueueReceive(wifinet_evt_queue, &evt, portMAX_DELAY) == pdTRUE &&
+            evt == WIFINET_CONFIG_AP) {
+            wifi_config_ap_start();
         }
     }
-
 }

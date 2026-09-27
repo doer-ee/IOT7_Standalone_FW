@@ -6,8 +6,6 @@
 static const char *CONTROL_TAG = "CONTROL";
 
 #define CONTROL_QUEUE_LENGTH 8
-#define CONTROL_MIN_PERIOD_100MS 2
-#define CONTROL_MAX_PERIOD_100MS 60000
 
 static QueueHandle_t control_queue;
 static portMUX_TYPE control_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -83,19 +81,6 @@ static void control_apply_function(const control_command_t *command)
     }
 }
 
-static void control_apply_report_period(const control_command_t *command)
-{
-    control_begin_command(command);
-    current_freq = command->report_period_100ms;
-    set_current_freq();
-    write_config_in_nvs();
-    portENTER_CRITICAL(&control_mux);
-    control_state.report_period_100ms = current_freq;
-    portEXIT_CRITICAL(&control_mux);
-    ESP_LOGI(CONTROL_TAG, "Report period set to %u ms",
-             (unsigned)current_freq * 100U);
-}
-
 static void control_apply_hold(const control_command_t *command)
 {
     measurement_snapshot_t snapshot = {0};
@@ -139,12 +124,6 @@ static void control_apply_mark(const control_command_t *command)
     portENTER_CRITICAL(&control_mux);
     control_state.last_mark_sequence = snapshot.sequence;
     portEXIT_CRITICAL(&control_mux);
-#if IOT7_ENABLE_LEGACY_MQTT
-    uint8_t event = WIFINET_MARK;
-    if (wifinet_evt_queue != NULL && xQueueSend(wifinet_evt_queue, &event, 0) != pdTRUE) {
-        ESP_LOGW(CONTROL_TAG, "Legacy MQTT mark event queue is full");
-    }
-#endif
     ESP_LOGI(CONTROL_TAG, "Marked sample sequence %u", (unsigned)snapshot.sequence);
 }
 
@@ -160,9 +139,6 @@ static void control_task(void *arg)
         switch (command.type) {
             case CONTROL_SET_FUNCTION:
                 control_apply_function(&command);
-                break;
-            case CONTROL_SET_REPORT_PERIOD:
-                control_apply_report_period(&command);
                 break;
             case CONTROL_SET_HOLD:
                 control_apply_hold(&command);
@@ -193,7 +169,6 @@ void control_init(void)
     memset(&control_state, 0, sizeof(control_state));
     control_state.function_id = current_fun;
     control_state.range = current_sw;
-    control_state.report_period_100ms = current_freq;
     control_state.last_command_ok = true;
     xTaskCreate(control_task, "CONTROL", 1024 * 3, NULL, 8, NULL);
 }
@@ -208,28 +183,6 @@ esp_err_t control_submit_function(uint8_t function_id, uint32_t *request_id)
         .function_id = function_id,
     };
     return control_enqueue(&command, request_id);
-}
-
-esp_err_t control_submit_report_period_100ms(uint16_t period_100ms, uint32_t *request_id)
-{
-    if (period_100ms < CONTROL_MIN_PERIOD_100MS || period_100ms > CONTROL_MAX_PERIOD_100MS) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    control_command_t command = {
-        .type = CONTROL_SET_REPORT_PERIOD,
-        .report_period_100ms = period_100ms,
-    };
-    return control_enqueue(&command, request_id);
-}
-
-esp_err_t control_submit_report_period_ms(uint32_t period_ms, uint32_t *request_id)
-{
-    if (period_ms < CONTROL_MIN_PERIOD_100MS * 100U ||
-        period_ms > CONTROL_MAX_PERIOD_100MS * 100U ||
-        period_ms % 100U != 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return control_submit_report_period_100ms((uint16_t)(period_ms / 100U), request_id);
 }
 
 esp_err_t control_submit_hold(bool enabled, uint32_t *request_id)
@@ -280,7 +233,6 @@ bool control_get_state(control_state_t *state)
     *state = control_state;
     state->function_id = current_fun;
     state->range = current_sw;
-    state->report_period_100ms = current_freq;
     portEXIT_CRITICAL(&control_mux);
     return true;
 }

@@ -149,9 +149,6 @@ void analog_switch(uint8_t sw)
 uint8_t K1Set,K1Cnt;
 void KeyScan()
 {
-#if IOT7_ENABLE_LEGACY_MQTT
-   uint8_t evt;
-#endif
 
 		if(gpio_get_level(KEY)==0) 
 		{		
@@ -164,10 +161,6 @@ void KeyScan()
          { 
                ESP_LOGI(SWITCH_FUN, "Press and hold the key");
                K1Set=0; 
-#if IOT7_ENABLE_LEGACY_MQTT
-               evt=WIFINET_MQTTSTOP;
-               xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
-#endif
                gpio_set_level(BEEP, 1);
                vTaskDelay(pdMS_TO_TICKS(100));
                gpio_set_level(BEEP, 0);
@@ -192,11 +185,6 @@ void KeyScan()
                gpio_set_level(BEEP, 1);
                vTaskDelay(pdMS_TO_TICKS(100));
                gpio_set_level(BEEP, 0);
-
-               if(progress ==PROG_ERROR) //Provisioning failed; tap the button to reopen the web provisioning hotspot
-               {
-                  start_config_router();
-               }  
 
                if(net_state == 1) //Mark the measurement while connected to the local network
                {
@@ -278,7 +266,7 @@ void switch_fun_task(void *arg)
       {
          ESP_LOGI(SWITCH_FUN, "LONG KEY");
          wait=2;
-         start_config_router();
+         request_wifi_config_ap();
          gpio_set_level(BEEP, 1);
          vTaskDelay(pdMS_TO_TICKS(1000));
          gpio_set_level(BEEP, 0);
@@ -315,8 +303,8 @@ void switch_fun_task(void *arg)
     };
 
     /* Create timer */
-    esp_err_t err = esp_timer_create(&esp_timer_create_args_t1, &esp_timer_handle_t1);
-    err = esp_timer_start_periodic(esp_timer_handle_t1, 30 * 1000);
+    esp_timer_create(&esp_timer_create_args_t1, &esp_timer_handle_t1);
+    esp_timer_start_periodic(esp_timer_handle_t1, 30 * 1000);
 
    //ESP_LOGI(SWITCH_FUN, "fun_mux(SW_FUN_CAN)");
     

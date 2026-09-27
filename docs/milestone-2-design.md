@@ -1,5 +1,7 @@
 # Milestone 2 Design: Web Controls
 
+> Historical design record. The standalone cleanup described in [standalone-firmware.md](standalone-firmware.md) removed MQTT and the Report period API after this milestone. Use the standalone document for current behavior.
+
 ## Goal
 
 Milestone 2 adds local-network control of the existing measurement functions while keeping the original MQTT and maintenance UART behavior. The web server will submit commands to a dedicated control queue. It will not write `current_fun`, `current_freq`, calibration flags, or GPIO outputs from an HTTP handler.

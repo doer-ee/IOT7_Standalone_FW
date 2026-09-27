@@ -18,10 +18,7 @@ static const char *TAG = "MAIN";
 
 
 
-char ver[2]="A2"; //Firmware version
-char equipment_type[2]="W1"; // Device type
-char signal_st=5; // Signal strength: 0-5; 5 is strongest and 0 means no signal
-char net_type=1; // Network type: 1=Wi-Fi, 2=4G, 3=NB-IoT
+static const char ver[] = "A2"; //Firmware version
 
 uint8_t net_led_add=0;
 
@@ -103,9 +100,6 @@ void gpio_init(void)
    gpio_set_direction(CHRG, GPIO_MODE_INPUT);
    gpio_pullup_en(CHRG);
 
-   gpio_pad_select_gpio(SEN);
-   gpio_set_direction(SEN, GPIO_MODE_INPUT);
-   gpio_pullup_en(SEN);	
 }
 
 
@@ -183,19 +177,6 @@ void usart0_task(void *arg)
             beep_start(2);
          }
 
-#if IOT7_ENABLE_LEGACY_MQTT
-         ls=strstr(data,"PASS=");
-         if(ls!=0)
-         {
-            for(i=0;i<32;i++)
-            {
-               mqtt_password[i]=ls[5+i];
-            }
-            write_config_in_nvs(); 
-            printf( "mqtt_password=%s\r\n", mqtt_password);
-            beep_start(2);
-         }
-#endif
       }
    }
 }
@@ -213,11 +194,6 @@ void write_config_in_nvs()
     ESP_ERROR_CHECK( nvs_set_u8(config_get_handle,"Alreadysaved", Already_saved) );
 
     ESP_ERROR_CHECK( nvs_set_str(config_get_handle,"device_ID",(const char *)device_ID) );
-#if IOT7_ENABLE_LEGACY_MQTT
-    ESP_ERROR_CHECK( nvs_set_str(config_get_handle,"password",(const char *)mqtt_password) );
-#endif
-
-    ESP_ERROR_CHECK( nvs_set_u16(config_get_handle,"c_freq", current_freq) );
     ESP_ERROR_CHECK( nvs_set_u8(config_get_handle,"c_fun", current_fun) );
 
     ESP_ERROR_CHECK( nvs_set_i32(config_get_handle,"Zero_0", Zero[0]) );
@@ -273,13 +249,6 @@ static void read_config_in_nvs(void)
         Len = sizeof(device_ID);
         nvs_get_str(config_get_handle, "device_ID", (char *)device_ID, &Len);
 
-#if IOT7_ENABLE_LEGACY_MQTT
-        Len = sizeof(mqtt_password);
-        nvs_get_str(config_get_handle, "password", (char *)mqtt_password, &Len);
-#endif
-
-        nvs_get_u16(config_get_handle, "c_freq", &current_freq);
-        if((current_freq<2)||(current_freq>60000)) current_freq=5;
 
         nvs_get_u8(config_get_handle, "c_fun", &current_fun);
 
@@ -336,22 +305,9 @@ void led_task(void *arg)
 	while (1) 
     {
         vTaskDelay(pdMS_TO_TICKS(100));
-        if((progress ==PROG_START)||(progress ==PROG_DATA)||(progress ==PROG_OVER)) //Provisioning in progress
+        if(wifi_config_ap_active) //Web provisioning AP is active
         {
             gpio_set_level(NET_LED, 0);
-        }
-        else if(progress ==PROG_ERROR) //Provisioning failed
-        {
-            if(net_led_add == 0)
-            {
-                gpio_set_level(NET_LED, 0);
-                net_led_add=1;
-            }
-            else if(net_led_add == 1)
-            {
-                gpio_set_level(NET_LED, 1);
-                net_led_add=0;
-            }
         }
         else if(net_state == 0) // Router disconnected: LED on for 0.8 seconds, off for 0.2 seconds
         {
@@ -379,19 +335,6 @@ void led_task(void *arg)
 
             if(++net_led_add > 9) net_led_add = 0;
         }
-        else if(net_state == 2) // Connected to the server: LED on for 0.2 seconds, off for 2.8 seconds
-        {
-            if(net_led_add == 0)
-            {
-                gpio_set_level(NET_LED, 0);
-            }
-            else if(net_led_add == 2)
-            {
-                gpio_set_level(NET_LED, 1);
-            }
-
-            if(++net_led_add > 29) net_led_add = 0;
-        }
 
         // while(gpio_get_level(PWR_KEY)==0)
         // {
@@ -403,7 +346,6 @@ void led_task(void *arg)
 
  //if(gpio_get_level(CHRG)==0) ESP_LOGI(TAG, "\r\n  CHRG  \r\n");
 
-    // if(gpio_get_level(SEN)==0) ESP_LOGI(TAG, "\r\n  SEN  \r\n");
 
    }
 }

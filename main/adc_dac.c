@@ -12,7 +12,6 @@
 
 const char *ADC_TASK_TAG = "ADC_TASK";
 
-uint16_t current_freq = 5; //Measurement period in 0.1-second units
 uint8_t electricity_st = 100; // Battery level: 0=low, 255=normal, 254=charging, 1-100=percentage
 uint32_t measured_value = 0; //Measurement value; all Fs indicate overrange
 uint8_t sign = 0; //Sign; 1 indicates negative
@@ -145,8 +144,7 @@ uint32_t MCP3421_ReadReg(void)
 }
 
 void I2C_Init()
-{	
-   esp_err_t ret;
+{
    i2c_config_t conf = {};
    conf.mode = I2C_MODE_MASTER;
    conf.sda_io_num = I2C_SDA;
@@ -857,7 +855,6 @@ uint32_t power_value;
 //Measure DC power
 void measure_dcpower(uint32_t ad_dat)
 {
-	  uint64_t Vol;
 		power_add++;
 		if(power_add==1)
 		{
@@ -915,7 +912,6 @@ void measure_dcpower(uint32_t ad_dat)
 //Measure AC power
 void measure_acpower(uint32_t ad_dat)
 {
-	  uint64_t Vol;
 		power_add++;
 		if(power_add==1)
 		{
@@ -1029,17 +1025,6 @@ void measure_diode(uint32_t ad_dat)
 
 
 
-#if IOT7_ENABLE_LEGACY_MQTT
-//Send measurements to the network periodically
-esp_timer_handle_t esp_timer_handle_txdata = 0;
-/* Timer interrupt callback */
-void esp_timer_txdata_cb(void *arg){
-    uint8_t evt;
-	evt=WIFINET_MVOM;
-	xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
-	//ESP_LOGI(ADC_TASK_TAG, "TX DATA");
-}
-#endif
 
 
 uint16_t pwroff_t_add=0;
@@ -1047,9 +1032,6 @@ uint16_t pwroff_t_add=0;
 esp_timer_handle_t esp_timer_handle_batt = 0;
 /* Timer interrupt callback */
 void esp_timer_batt_cb(void *arg){
-#if IOT7_ENABLE_LEGACY_MQTT
-	uint8_t evt;
-#endif
 	int val;
 	int batt_v;
 
@@ -1064,10 +1046,6 @@ void esp_timer_batt_cb(void *arg){
 	{
 		if(batt_v<3200)
 		{
-#if IOT7_ENABLE_LEGACY_MQTT
-			evt=WIFINET_MQTTSTOP;
-            xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
-#endif
 			gpio_set_level(BEEP, 1);
 			vTaskDelay(pdMS_TO_TICKS(100));
 			gpio_set_level(BEEP, 0);
@@ -1128,10 +1106,6 @@ void esp_timer_batt_cb(void *arg){
 				}
 				if(--pwroff_t_add==0) //Power off after 10 minutes at low battery
 				{
-#if IOT7_ENABLE_LEGACY_MQTT
-					evt=WIFINET_MQTTSTOP;
-                    xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
-#endif
 					gpio_set_level(BEEP, 1);
 					vTaskDelay(pdMS_TO_TICKS(100));
 					gpio_set_level(BEEP, 0);
@@ -1192,16 +1166,6 @@ void esp_timer_batt_cb(void *arg){
 	}
 }
 
-void set_current_freq(){
-#if IOT7_ENABLE_LEGACY_MQTT
-    if (esp_timer_handle_txdata == NULL) {
-        ESP_LOGW(ADC_TASK_TAG, "Report timer is not initialized; period will apply after startup");
-        return;
-    }
-    esp_timer_stop(esp_timer_handle_txdata);
-    esp_timer_start_periodic(esp_timer_handle_txdata, current_freq * 100* 1000);
-#endif
-}
 
 
 
@@ -1216,17 +1180,6 @@ void adc_task(void *arg)
 
 
 
-#if IOT7_ENABLE_LEGACY_MQTT
-      // Initialize the timer structure
-    esp_timer_create_args_t esp_timer_create_args_txdata = {
-        .callback = &esp_timer_txdata_cb, // Timer callback function
-        .arg = NULL, // Callback argument
-        .name = "esp_timer_txdata" // Timer name
-    };
-   /* Create timer */
-    esp_timer_create(&esp_timer_create_args_txdata, &esp_timer_handle_txdata);
-    esp_timer_start_periodic(esp_timer_handle_txdata, current_freq * 100* 1000);
-#endif
 
 
 	 // Initialize the timer structure
