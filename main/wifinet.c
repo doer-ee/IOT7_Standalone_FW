@@ -56,6 +56,7 @@ static esp_err_t config_page_get_handler(httpd_req_t *req);
 static esp_err_t config_save_post_handler(httpd_req_t *req);
 static esp_err_t status_page_get_handler(httpd_req_t *req);
 static esp_err_t status_api_get_handler(httpd_req_t *req);
+static esp_err_t measurement_api_get_handler(httpd_req_t *req);
 static void status_httpd_start(void);
 static void status_httpd_stop(void);
 static void wifi_apply_task(void *arg);
@@ -929,37 +930,73 @@ static bool form_get_value(const char *body, const char *key, char *out, size_t 
 }
 
 /*
- * The first version of the local UI is deliberately read-only.  Keep the
- * page small and fetch the live values from /api/status so a phone can leave
- * the page open while the device reconnects or changes signal strength.
+ * The read-only dashboard polls status and measurement independently.
+ * Measurement values remain in the firmware's raw unit representation until
+ * the unit scaling has been checked against a low-voltage reference.
  */
 static const char status_page[] =
     "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>IOT7 Status</title>"
-    "<style>body{font-family:system-ui,sans-serif;max-width:34rem;margin:2rem auto;padding:0 1rem;"
+    "<title>IOT7 Meter</title>"
+    "<style>body{font-family:system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;"
     "background:#f5f7fa;color:#17202a}main{background:white;border-radius:12px;padding:1.2rem;"
-    "box-shadow:0 2px 12px #0001}h2{margin-top:0}dl{display:grid;grid-template-columns:8rem 1fr;"
-    "gap:.55rem 1rem}dt{color:#667085}dd{margin:0;font-weight:600;word-break:break-word}"
+    "box-shadow:0 2px 12px #0001}h2{margin-top:0}h3{margin:1.4rem 0 .7rem}"
+    ".reading{font-size:2.6rem;font-weight:700;line-height:1.15;word-break:break-word}"
+    ".reading small{font-size:1.1rem}dl{display:grid;grid-template-columns:9rem 1fr;gap:.55rem 1rem}"
+    "dt{color:#667085}dd{margin:0;font-weight:600;word-break:break-word}"
     ".ok{color:#087f5b}.warn{color:#b54708}small{color:#667085}</style></head><body>"
-    "<main><h2>IOT7 Device Status</h2><p id='state'>Loading status...</p>"
-    "<dl><dt>Wi-Fi</dt><dd id='ssid'>-</dd><dt>Signal strength</dt><dd id='rssi'>-</dd>"
-    "<dt>Channel</dt><dd id='channel'>-</dd><dt>IP address</dt><dd id='ip'>-</dd>"
-    "<dt>Subnet mask</dt><dd id='netmask'>-</dd><dt>Gateway</dt><dd id='gateway'>-</dd>"
-    "<dt>Device MAC</dt><dd id='mac'>-</dd>"
+    "<main><h2>IOT7 Meter</h2><p id='state'>Loading status...</p>"
+    "<h3>Live measurement</h3><div class='reading'><span id='reading'>Waiting...</span> "
+    "<small id='reading_unit'></small></div><p id='reading_state'>Waiting for a sample</p>"
+    "<dl><dt>Function</dt><dd id='function'>-</dd><dt>Range</dt><dd id='range'>-</dd>"
+    "<dt>Battery</dt><dd id='battery'>-</dd><dt>Sample age</dt><dd id='sample_age'>-</dd>"
+    "<dt>Observed interval</dt><dd id='interval'>-</dd>"
+    "<dt>Raw data</dt><dd id='raw'>-</dd></dl>"
+    "<h3>Device and Wi-Fi</h3><dl><dt>Wi-Fi</dt><dd id='ssid'>-</dd>"
+    "<dt>Signal strength</dt><dd id='rssi'>-</dd><dt>Channel</dt><dd id='channel'>-</dd>"
+    "<dt>IP address</dt><dd id='ip'>-</dd><dt>Subnet mask</dt><dd id='netmask'>-</dd>"
+    "<dt>Gateway</dt><dd id='gateway'>-</dd><dt>Device MAC</dt><dd id='mac'>-</dd>"
     "<dt>Device ID</dt><dd id='device'>-</dd><dt>Firmware</dt><dd id='firmware'>-</dd>"
     "<dt>Free memory</dt><dd id='heap'>-</dd><dt>Uptime</dt><dd id='uptime'>-</dd></dl>"
-    "<p><small>This page refreshes every 3 seconds. Controls and measurements will be added later.</small></p></main>"
-    "<script>const e=id=>document.getElementById(id);function text(id,v){e(id).textContent=v?v:'-'}"
-    "function refresh(){fetch('/api/status',{cache:'no-store'}).then(r=>r.json()).then(s=>{"
-    "text('ssid',s.ssid);text('rssi',s.connected?s.rssi+' dBm':'Disconnected');"
+    "<p><small>Measurements refresh every second. Controls will be added later.</small></p></main>"
+    "<script>const e=id=>document.getElementById(id);"
+    "function text(id,v){e(id).textContent=(v===null||v===undefined||v==='')?'-':v}"
+    "function json(url){return fetch(url,{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()})}"
+    "function battery(v){if(v===254)return 'Charging';if(v===255)return 'Normal';"
+    "if(v===0)return 'Low';if(v>=1&&v<=100)return v+'%';return 'Unknown'}"
+    "let lastSequence=0,lastTimestamp=0;"
+    "function refreshMeasurement(){json('/api/measurement').then(m=>{"
+    "text('function',m.function);text('range',m.range_label+' (code '+m.range+')');"
+    "text('battery',battery(m.battery));"
+    "if(!m.sample_ready){text('reading','Waiting...');text('reading_unit','');"
+    "text('reading_state',m.range_switching?'Adjusting range':'Waiting for a new sample');"
+    "text('sample_age','-');text('raw','-');"
+    "text('interval','-');lastSequence=0;lastTimestamp=0;return}"
+    "text('sample_age',m.sample_age_ms+' ms');"
+    "text('raw',m.value_raw+' / unit code '+m.unit_code+' / sequence '+m.sample_sequence);"
+    "if(m.sample_sequence!==lastSequence){if(lastTimestamp&&m.timestamp_ms>lastTimestamp)"
+    "text('interval',((m.timestamp_ms-lastTimestamp)/1000).toFixed(2)+' s');"
+    "lastTimestamp=m.timestamp_ms;lastSequence=m.sample_sequence}"
+    "if(m.sample_age_ms>5000){text('reading_state','Sample is stale');e('reading_state').className='warn'}"
+    "else if(m.overrange){text('reading_state','Overrange');e('reading_state').className='warn'}"
+    "else if(!m.valid){text('reading_state','Invalid reading');e('reading_state').className='warn'}"
+    "else{text('reading_state','Live sample');e('reading_state').className='ok'}"
+    "if(m.overrange){text('reading','OL');text('reading_unit','')}"
+    "else if(!m.valid){text('reading','—');text('reading_unit','')}"
+    "else{text('reading',(m.sign?'-':'')+m.value_raw);"
+    "text('reading_unit',({'uV':'µV','mV':'mV','uA':'µA','mOhm':'mΩ','Ohm':'Ω','uW':'µW'})[m.unit]||m.unit)}"
+    "}).catch(()=>{text('reading_state','Failed to load measurement');"
+    "e('reading_state').className='warn'})}"
+    "function refreshStatus(){json('/api/status').then(s=>{text('ssid',s.ssid);"
+    "text('rssi',s.connected?s.rssi+' dBm':'Disconnected');"
     "text('channel',s.connected?s.channel:'-');text('ip',s.ip);text('netmask',s.netmask);"
-    "text('gateway',s.gateway);"
-    "text('mac',s.mac);text('device',s.device_id);text('firmware',s.firmware);"
-    "text('heap',s.heap_free+' bytes');text('uptime',s.uptime_s+' s');"
-    "e('state').textContent=s.connected?'Wi-Fi connected':'Wi-Fi disconnected';"
-    "e('state').className=s.connected?'ok':'warn';}).catch(()=>{e('state').textContent='Failed to load status';"
-    "e('state').className='warn'})}refresh();setInterval(refresh,3000);</script></body></html>";
+    "text('gateway',s.gateway);text('mac',s.mac);text('device',s.device_id);"
+    "text('firmware',s.firmware);text('heap',s.heap_free+' bytes');"
+    "text('uptime',s.uptime_s+' s');text('state',s.connected?'Wi-Fi connected':'Wi-Fi disconnected');"
+    "e('state').className=s.connected?'ok':'warn'}).catch(()=>{"
+    "text('state','Failed to load status');e('state').className='warn'})}"
+    "refreshMeasurement();refreshStatus();setInterval(refreshMeasurement,1000);"
+    "setInterval(refreshStatus,3000);</script></body></html>";
 
 static size_t json_escape(const char *src, char *dst, size_t dst_size)
 {
@@ -1015,7 +1052,7 @@ static esp_err_t status_api_get_handler(httpd_req_t *req)
 {
     wifi_ap_record_t ap_info;
     memset(&ap_info, 0, sizeof(ap_info));
-    bool connected = esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK && net_state == 1;
+    bool connected = esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK && net_state != 0;
 
     tcpip_adapter_ip_info_t ip_info;
     memset(&ip_info, 0, sizeof(ip_info));
@@ -1065,6 +1102,103 @@ static esp_err_t status_api_get_handler(httpd_req_t *req)
     return err;
 }
 
+static const char *measurement_function_name(uint8_t function_id)
+{
+    switch (function_id) {
+        case 1: return "DC voltage";
+        case 2: return "AC voltage";
+        case 3: return "DC current (mA)";
+        case 4: return "DC current (A)";
+        case 5: return "AC current (mA)";
+        case 6: return "AC current (A)";
+        case 7: return "Resistance";
+        case 8: return "Continuity";
+        case 9: return "DC power";
+        case 10: return "AC power";
+        case 11: return "Diode";
+        default: return "Unknown";
+    }
+}
+
+static const char *measurement_range_name(uint8_t range)
+{
+    switch (range) {
+        case ASW_DCV1: return "DCV1";
+        case ASW_DCV2: return "DCV2";
+        case ASW_DCV3: return "DCV3";
+        case ASW_ACV1: return "ACV1";
+        case ASW_ACV2: return "ACV2";
+        case ASW_ACV3: return "ACV3";
+        case ASW_DCMA: return "DC mA";
+        case ASW_DCA: return "DC A";
+        case ASW_ACMA: return "AC mA";
+        case ASW_ACA: return "AC A";
+        case ASW_R2: return "R2";
+        case ASW_R3: return "R3";
+        case ASW_R4: return "R4";
+        case ASW_R5: return "R5";
+        case ASW_BEEP: return "Continuity";
+        default: return "Unknown";
+    }
+}
+
+static const char *measurement_unit_name(uint8_t unit_code)
+{
+    switch (unit_code) {
+        case 0x01: return "uV";
+        case 0x02: return "mV";
+        case 0x05: return "uA";
+        case 0x09: return "mOhm";
+        case 0x0A: return "Ohm";
+        case 0x0C: return "uW";
+        default: return "";
+    }
+}
+
+static esp_err_t measurement_api_get_handler(httpd_req_t *req)
+{
+    measurement_snapshot_t snapshot = {0};
+    bool snapshot_present = measurement_get_snapshot(&snapshot);
+    bool range_switching = snapshot_present && snapshot.function == current_fun &&
+                           snapshot.range != current_sw && current_fun != 9 && current_fun != 10;
+    bool sample_ready = snapshot_present && snapshot.function == current_fun && !range_switching;
+    uint8_t function_id = sample_ready ? snapshot.function : current_fun;
+    uint8_t range = sample_ready ? snapshot.range : current_sw;
+    uint64_t now_ms = (uint64_t)esp_timer_get_time() / 1000ULL;
+    uint64_t age_ms = sample_ready && now_ms >= snapshot.timestamp_ms
+                          ? now_ms - snapshot.timestamp_ms : 0;
+    uint8_t battery = electricity_st;
+    char json[512];
+    int length = snprintf(json, sizeof(json),
+                          "{\"sample_ready\":%s,\"range_switching\":%s,\"valid\":%s,\"overrange\":%s,"
+                          "\"function\":\"%s\",\"function_id\":%u,"
+                          "\"range\":%u,\"range_label\":\"%s\","
+                          "\"value_raw\":%u,\"sign\":%u,"
+                          "\"unit_code\":%u,\"unit\":\"%s\","
+                          "\"sample_sequence\":%u,\"timestamp_ms\":%llu,"
+                          "\"sample_age_ms\":%llu,\"battery\":%u}",
+                          sample_ready ? "true" : "false",
+                          range_switching ? "true" : "false",
+                          sample_ready && snapshot.valid ? "true" : "false",
+                          sample_ready && snapshot.overrange ? "true" : "false",
+                          measurement_function_name(function_id), (unsigned)function_id,
+                          (unsigned)range, measurement_range_name(range),
+                          sample_ready ? (unsigned)snapshot.value_raw : 0U,
+                          sample_ready ? (unsigned)snapshot.sign : 0U,
+                          sample_ready ? (unsigned)snapshot.unit : 0U,
+                          sample_ready ? measurement_unit_name(snapshot.unit) : "",
+                          sample_ready ? (unsigned)snapshot.sequence : 0U,
+                          sample_ready ? (unsigned long long)snapshot.timestamp_ms : 0ULL,
+                          (unsigned long long)age_ms, (unsigned)battery);
+    if (length < 0 || (size_t)length >= sizeof(json)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Measurement response is too large");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, length);
+}
+
 static esp_err_t status_page_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -1104,11 +1238,19 @@ static void status_httpd_start(void)
         .handler = status_api_get_handler,
         .user_ctx = NULL,
     };
+    static const httpd_uri_t measurement_uri = {
+        .uri = "/api/measurement",
+        .method = HTTP_GET,
+        .handler = measurement_api_get_handler,
+        .user_ctx = NULL,
+    };
     esp_err_t page_err = httpd_register_uri_handler(status_httpd, &page_uri);
     esp_err_t api_err = httpd_register_uri_handler(status_httpd, &api_uri);
-    if (page_err != ESP_OK || api_err != ESP_OK) {
-        ESP_LOGE(WIFINET, "failed to register Wi-Fi status web routes: page=%s api=%s",
-                 esp_err_to_name(page_err), esp_err_to_name(api_err));
+    esp_err_t measurement_err = httpd_register_uri_handler(status_httpd, &measurement_uri);
+    if (page_err != ESP_OK || api_err != ESP_OK || measurement_err != ESP_OK) {
+        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s",
+                 esp_err_to_name(page_err), esp_err_to_name(api_err),
+                 esp_err_to_name(measurement_err));
         status_httpd_stop();
         return;
     }

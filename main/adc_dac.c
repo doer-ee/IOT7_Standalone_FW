@@ -3,6 +3,8 @@
 #include "adc_dac.h"
 
 #define    PRINTF_VALUE    0  //Enable measurement logging
+#define ADC_READ_ERROR UINT32_MAX
+#define ADC_NOT_READY (UINT32_MAX - 1U)
 
 
 const char *ADC_TASK_TAG = "ADC_TASK";
@@ -12,6 +14,61 @@ uint8_t electricity_st = 100; // Battery level: 0=low, 255=normal, 254=charging,
 uint32_t measured_value = 0; //Measurement value; all Fs indicate overrange
 uint8_t sign = 0; //Sign; 1 indicates negative
 uint8_t unit = 0; //Measurement unit
+
+static portMUX_TYPE measurement_mux = portMUX_INITIALIZER_UNLOCKED;
+static measurement_snapshot_t latest_measurement;
+
+bool measurement_get_snapshot(measurement_snapshot_t *snapshot)
+{
+    if (snapshot == NULL) {
+        return false;
+    }
+    portENTER_CRITICAL(&measurement_mux);
+    *snapshot = latest_measurement;
+    portEXIT_CRITICAL(&measurement_mux);
+    return snapshot->timestamp_ms != 0;
+}
+
+static void measurement_clear_snapshot(void)
+{
+    portENTER_CRITICAL(&measurement_mux);
+    latest_measurement.valid = 0;
+    latest_measurement.overrange = 0;
+    latest_measurement.timestamp_ms = 0;
+    portEXIT_CRITICAL(&measurement_mux);
+}
+
+static bool measurement_range_matches_function(uint8_t function_id, uint8_t range)
+{
+    switch (function_id) {
+        case 1: return range == ASW_DCV1 || range == ASW_DCV2 || range == ASW_DCV3;
+        case 2: return range == ASW_ACV1 || range == ASW_ACV2 || range == ASW_ACV3;
+        case 3: return range == ASW_DCMA;
+        case 4: return range == ASW_DCA;
+        case 5: return range == ASW_ACMA;
+        case 6: return range == ASW_ACA;
+        case 7: return range >= ASW_R2 && range <= ASW_R5;
+        case 8: return range == ASW_BEEP;
+        case 11: return range == ASW_R5;
+        default: return true;
+    }
+}
+
+static void measurement_publish(uint8_t function_id, uint8_t range)
+{
+    uint64_t timestamp_ms = (uint64_t)esp_timer_get_time() / 1000ULL;
+    portENTER_CRITICAL(&measurement_mux);
+    latest_measurement.value_raw = measured_value;
+    latest_measurement.function = function_id;
+    latest_measurement.range = range;
+    latest_measurement.sign = sign;
+    latest_measurement.unit = unit;
+    latest_measurement.overrange = measured_value == UINT32_MAX;
+    latest_measurement.valid = unit != 0 && !latest_measurement.overrange;
+    latest_measurement.timestamp_ms = timestamp_ms;
+    latest_measurement.sequence++;
+    portEXIT_CRITICAL(&measurement_mux);
+}
 
 int Zero[10]={0,0,0,0,0,0,0,0,0,0}; //Zero calibration values
 uint8_t  Zero_b=0;  //Start zero calibration
@@ -46,7 +103,7 @@ Description:
 ****************************************************************************/
 uint32_t MCP3421_ReadReg(void)
 {
-    uint8_t elec[4], mcp_busy;
+    uint8_t elec[4] = {0};
  
    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
    i2c_master_start(cmd);
@@ -58,9 +115,14 @@ uint32_t MCP3421_ReadReg(void)
    i2c_master_stop(cmd);
    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
    if (ret != ESP_OK) {
-       ESP_LOGI(ADC_TASK_TAG, "MCP3421_ReadReg ERROR =%d",ret);
+       ESP_LOGW(ADC_TASK_TAG, "MCP3421_ReadReg failed: %s", esp_err_to_name(ret));
+       i2c_cmd_link_delete(cmd);
+       return ADC_READ_ERROR;
    }
    i2c_cmd_link_delete(cmd);
+   if (elec[3] & 0x80) {
+       return ADC_NOT_READY;
+   }
 
    //ESP_LOG_BUFFER_HEX(ADC_TASK_TAG, dat, 4);
    return ((uint32_t)((uint32_t)elec[0] << 16 | (uint32_t)elec[1] << 8 | elec[2])) & 0x03FFFF;
@@ -1186,6 +1248,8 @@ void adc_task(void *arg)
 
 	if(current_fun_old!=current_fun)
 	{
+        measurement_clear_snapshot();
+        power_add = 0;
 		current_fun_old=current_fun;
 		if(current_fun==8)
 		{
@@ -1203,18 +1267,34 @@ void adc_task(void *arg)
 	}
 
 
-    if(current_fun==8)
+    const uint8_t sample_function = current_fun;
+    const uint8_t sample_range = current_sw;
+    if(sample_function==8)
 	{
 		vTaskDelay(pdMS_TO_TICKS(50));
 			adc_value = MCP3421_ReadReg();
+            if (adc_value == ADC_NOT_READY) {
+                continue;
+            }
+            if (adc_value == ADC_READ_ERROR) {
+                measurement_clear_snapshot();
+                continue;
+            }
 			measure_beep(adc_value);	
 	}					
 	else 
 	{
 			vTaskDelay(pdMS_TO_TICKS(300));
 			adc_value = MCP3421_ReadReg();
+            if (adc_value == ADC_NOT_READY) {
+                continue;
+            }
+            if (adc_value == ADC_READ_ERROR) {
+                measurement_clear_snapshot();
+                continue;
+            }
 		    //ESP_LOGI(ADC_TASK_TAG,"ADC=%d\r\n",adc_value);
-			switch(current_fun)
+			switch(sample_function)
 				{
 					case 1:// DC voltage
 						measure_dcv(adc_value);
@@ -1249,8 +1329,13 @@ void adc_task(void *arg)
 					case 11:// Diode
 						measure_diode(adc_value);
 					break;
-				} 
-	}	
+				}
+	}
+    // Power modes publish only after a complete voltage/current measurement cycle.
+    if (measurement_range_matches_function(sample_function, sample_range) &&
+        ((sample_function != 9 && sample_function != 10) || power_add == 0)) {
+        measurement_publish(sample_function, sample_range);
+    }
    }
 
 }
