@@ -3,6 +3,7 @@
 #include "wifinet.h"
 #include "esp_http_server.h"
 #include <stdbool.h>
+#include <stdlib.h>
 
 
 const char *WIFINET = "WIFINET";
@@ -57,6 +58,12 @@ static esp_err_t config_save_post_handler(httpd_req_t *req);
 static esp_err_t status_page_get_handler(httpd_req_t *req);
 static esp_err_t status_api_get_handler(httpd_req_t *req);
 static esp_err_t measurement_api_get_handler(httpd_req_t *req);
+static esp_err_t control_api_get_handler(httpd_req_t *req);
+static esp_err_t control_function_post_handler(httpd_req_t *req);
+static esp_err_t control_period_post_handler(httpd_req_t *req);
+static esp_err_t control_hold_post_handler(httpd_req_t *req);
+static esp_err_t control_zero_post_handler(httpd_req_t *req);
+static esp_err_t control_mark_post_handler(httpd_req_t *req);
 static void status_httpd_start(void);
 static void status_httpd_stop(void);
 static void wifi_apply_task(void *arg);
@@ -607,58 +614,55 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
                         ls_data+=Data_jx_data[1];
                         if((ls_data!=0xFFFF)&(ls_data>1))
                         {
-                            current_freq=ls_data;
-                            write_config_in_nvs(); 
-                            set_current_freq();
+                            control_submit_report_period_100ms(ls_data, NULL);
 
                         }
                         if(Data_jx_data[2]!=0xFF)
                         {
                             if(Data_jx_data[2]==0x01)
                             {
-                                current_fun=0x01;
+                                control_submit_function(0x01, NULL);
                             }
                             else if(Data_jx_data[2]==0x02)
                             {   
-                                current_fun=0x02;
+                                control_submit_function(0x02, NULL);
                             }
                             else if(Data_jx_data[2]==0x04)
                             {  
-                                current_fun=0x03;
+                                control_submit_function(0x03, NULL);
                             }
                             else if(Data_jx_data[2]==0x05)
                             {
-                                current_fun=0x04;
+                                control_submit_function(0x04, NULL);
                             }
                             else if(Data_jx_data[2]==0x06)
                             {
-                                current_fun=0x05;
+                                control_submit_function(0x05, NULL);
                             }
                             else if(Data_jx_data[2]==0x07)
                             {
-                                current_fun=0x06;
+                                control_submit_function(0x06, NULL);
                             }
                             else if(Data_jx_data[2]==0x08)
                             {
-                                current_fun=0x07;
+                                control_submit_function(0x07, NULL);
                             }
                             else if(Data_jx_data[2]==0x0A)
                             {
-                                current_fun=0x0B;
+                                control_submit_function(0x0B, NULL);
                             }
                             else if(Data_jx_data[2]==0x0B)
                             {
-                                current_fun=0x08;
+                                control_submit_function(0x08, NULL);
                             }
                             else if(Data_jx_data[2]==0x0C)
                             {
-                                current_fun=0x09;
+                                control_submit_function(0x09, NULL);
                             }
                             else if(Data_jx_data[2]==0x0D)
                             {
-                                current_fun=0x0A;
+                                control_submit_function(0x0A, NULL);
                             }
-                            write_config_in_nvs(); 
                         }  
                         DataCombine(0x0802,Data_rxsn,NULL,0);
                         break;
@@ -674,8 +678,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
                         break;
                     case 0x0807://Zero the meter
                         beep_start(2);
-                        Zero_b=1;
-                        write_config_in_nvs(); 
+                        control_submit_zero(NULL);
                         DataCombine(0x0808,Data_rxsn,NULL,0);
                         break;
                 }
@@ -958,7 +961,21 @@ static const char status_page[] =
     "<dt>Gateway</dt><dd id='gateway'>-</dd><dt>Device MAC</dt><dd id='mac'>-</dd>"
     "<dt>Device ID</dt><dd id='device'>-</dd><dt>Firmware</dt><dd id='firmware'>-</dd>"
     "<dt>Free memory</dt><dd id='heap'>-</dd><dt>Uptime</dt><dd id='uptime'>-</dd></dl>"
-    "<p><small>Measurements refresh every second. Controls will be added later.</small></p></main>"
+    "<h3>Controls</h3><p id='control_state'>Loading controls...</p>"
+    "<label>Function <select id='control_function'>"
+    "<option value='1'>DC voltage</option><option value='2'>AC voltage</option>"
+    "<option value='3'>DC current (mA)</option><option value='4'>DC current (A)</option>"
+    "<option value='5'>AC current (mA)</option><option value='6'>AC current (A)</option>"
+    "<option value='7'>Resistance</option><option value='8'>Continuity</option>"
+    "<option value='9'>DC power</option><option value='10'>AC power</option>"
+    "<option value='11'>Diode</option></select></label>"
+    "<button id='function_button' onclick='setFunction()'>Set function</button>"
+    "<p><label>Report period (ms) <input id='report_period' type='number' min='200' max='6000000' step='100'></label>"
+    "<button id='period_button' onclick='setPeriod()'>Set period</button></p>"
+    "<p><button id='hold_button' onclick='toggleHold()'>Enable hold</button> "
+    "<button id='zero_button' onclick='zeroMeasurement()'>Zero</button> "
+    "<button id='mark_button' onclick='markMeasurement()'>Mark</button></p>"
+    "<p id='control_result'><small>Measurements refresh every second.</small></p></main>"
     "<script>const e=id=>document.getElementById(id);"
     "function text(id,v){e(id).textContent=(v===null||v===undefined||v==='')?'-':v}"
     "function json(url){return fetch(url,{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()})}"
@@ -977,7 +994,8 @@ static const char status_page[] =
     "if(m.sample_sequence!==lastSequence){if(lastTimestamp&&m.timestamp_ms>lastTimestamp)"
     "text('interval',((m.timestamp_ms-lastTimestamp)/1000).toFixed(2)+' s');"
     "lastTimestamp=m.timestamp_ms;lastSequence=m.sample_sequence}"
-    "if(m.sample_age_ms>5000){text('reading_state','Sample is stale');e('reading_state').className='warn'}"
+    "if(m.hold){text('reading_state','Held sample');e('reading_state').className='warn'}"
+    "else if(m.sample_age_ms>5000){text('reading_state','Sample is stale');e('reading_state').className='warn'}"
     "else if(m.overrange){text('reading_state','Overrange');e('reading_state').className='warn'}"
     "else if(!m.valid){text('reading_state','Invalid reading');e('reading_state').className='warn'}"
     "else{text('reading_state','Live sample');e('reading_state').className='ok'}"
@@ -987,6 +1005,25 @@ static const char status_page[] =
     "text('reading_unit',({'uV':'µV','mV':'mV','uA':'µA','mOhm':'mΩ','Ohm':'Ω','uW':'µW'})[m.unit]||m.unit)}"
     "}).catch(()=>{text('reading_state','Failed to load measurement');"
     "e('reading_state').className='warn'})}"
+    "function controlPost(url,body){return fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body||''})"
+    ".then(r=>r.json().then(v=>{if(!r.ok)throw Error(v.error||r.status);return v}))}"
+    "function setFunction(){let v=e('control_function').value;controlPost('/api/control/function','function_id='+encodeURIComponent(v))"
+    ".then(v=>text('control_result','Function request '+v.request_id+' accepted')).catch(err=>text('control_result','Function failed: '+err.message))}"
+    "function setPeriod(){let v=e('report_period').value;controlPost('/api/control/period','period_ms='+encodeURIComponent(v))"
+    ".then(v=>text('control_result','Period request '+v.request_id+' accepted')).catch(err=>text('control_result','Period failed: '+err.message))}"
+    "function toggleHold(){let v=e('hold_button').dataset.enabled==='1'?'0':'1';controlPost('/api/control/hold','enabled='+v)"
+    ".then(v=>text('control_result','Hold request '+v.request_id+' accepted')).catch(err=>text('control_result','Hold failed: '+err.message))}"
+    "function zeroMeasurement(){if(!confirm('Disconnect external input before zeroing. Continue?'))return;"
+    "controlPost('/api/control/zero','').then(v=>text('control_result','Zero request '+v.request_id+' accepted')).catch(err=>text('control_result','Zero failed: '+err.message))}"
+    "function markMeasurement(){controlPost('/api/control/mark','').then(v=>text('control_result','Mark request '+v.request_id+' accepted')).catch(err=>text('control_result','Mark failed: '+err.message))}"
+    "function refreshControl(){json('/api/control').then(c=>{e('control_function').value=c.function_id;"
+    "e('report_period').value=c.report_period_ms;let busy=c.function_pending||c.zero_pending;"
+    "e('function_button').disabled=busy;e('period_button').disabled=busy;e('zero_button').disabled=c.zero_pending;"
+    "e('mark_button').disabled=!c.sample_available;e('control_function').disabled=busy;"
+    "let h=e('hold_button');h.dataset.enabled=c.hold?'1':'0';h.textContent=c.hold?'Release hold':'Enable hold';"
+    "text('control_state',c.function_pending?'Changing function...':(c.zero_pending?'Zeroing...':(c.last_command_ok?'Ready':'Last command failed')));"
+    "e('control_state').className=c.last_command_ok?'ok':'warn'"
+    "}).catch(()=>{text('control_state','Failed to load controls');e('control_state').className='warn'})}"
     "function refreshStatus(){json('/api/status').then(s=>{text('ssid',s.ssid);"
     "text('rssi',s.connected?s.rssi+' dBm':'Disconnected');"
     "text('channel',s.connected?s.channel:'-');text('ip',s.ip);text('netmask',s.netmask);"
@@ -995,8 +1032,8 @@ static const char status_page[] =
     "text('uptime',s.uptime_s+' s');text('state',s.connected?'Wi-Fi connected':'Wi-Fi disconnected');"
     "e('state').className=s.connected?'ok':'warn'}).catch(()=>{"
     "text('state','Failed to load status');e('state').className='warn'})}"
-    "refreshMeasurement();refreshStatus();setInterval(refreshMeasurement,1000);"
-    "setInterval(refreshStatus,3000);</script></body></html>";
+    "refreshMeasurement();refreshStatus();refreshControl();setInterval(refreshMeasurement,1000);"
+    "setInterval(refreshStatus,3000);setInterval(refreshControl,1000);</script></body></html>";
 
 static size_t json_escape(const char *src, char *dst, size_t dst_size)
 {
@@ -1158,10 +1195,12 @@ static const char *measurement_unit_name(uint8_t unit_code)
 static esp_err_t measurement_api_get_handler(httpd_req_t *req)
 {
     measurement_snapshot_t snapshot = {0};
-    bool snapshot_present = measurement_get_snapshot(&snapshot);
-    bool range_switching = snapshot_present && snapshot.function == current_fun &&
+    bool held = false;
+    bool snapshot_present = control_get_display_snapshot(&snapshot, &held);
+    bool range_switching = !held && snapshot_present && snapshot.function == current_fun &&
                            snapshot.range != current_sw && current_fun != 9 && current_fun != 10;
-    bool sample_ready = snapshot_present && snapshot.function == current_fun && !range_switching;
+    bool sample_ready = held ? snapshot_present :
+                        (snapshot_present && snapshot.function == current_fun && !range_switching);
     uint8_t function_id = sample_ready ? snapshot.function : current_fun;
     uint8_t range = sample_ready ? snapshot.range : current_sw;
     uint64_t now_ms = (uint64_t)esp_timer_get_time() / 1000ULL;
@@ -1176,7 +1215,7 @@ static esp_err_t measurement_api_get_handler(httpd_req_t *req)
                           "\"value_raw\":%u,\"sign\":%u,"
                           "\"unit_code\":%u,\"unit\":\"%s\","
                           "\"sample_sequence\":%u,\"timestamp_ms\":%llu,"
-                          "\"sample_age_ms\":%llu,\"battery\":%u}",
+                          "\"sample_age_ms\":%llu,\"battery\":%u,\"hold\":%s}",
                           sample_ready ? "true" : "false",
                           range_switching ? "true" : "false",
                           sample_ready && snapshot.valid ? "true" : "false",
@@ -1189,7 +1228,8 @@ static esp_err_t measurement_api_get_handler(httpd_req_t *req)
                           sample_ready ? measurement_unit_name(snapshot.unit) : "",
                           sample_ready ? (unsigned)snapshot.sequence : 0U,
                           sample_ready ? (unsigned long long)snapshot.timestamp_ms : 0ULL,
-                          (unsigned long long)age_ms, (unsigned)battery);
+                          (unsigned long long)age_ms, (unsigned)battery,
+                          held ? "true" : "false");
     if (length < 0 || (size_t)length >= sizeof(json)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Measurement response is too large");
         return ESP_FAIL;
@@ -1197,6 +1237,194 @@ static esp_err_t measurement_api_get_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, json, length);
+}
+
+static esp_err_t control_read_form(httpd_req_t *req, char *body, size_t body_size)
+{
+    if (req == NULL || body == NULL || body_size == 0 || req->content_len >= body_size) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    size_t received = 0;
+    while (received < req->content_len) {
+        int count = httpd_req_recv(req, body + received, req->content_len - received);
+        if (count <= 0) {
+            return ESP_FAIL;
+        }
+        received += (size_t)count;
+    }
+    body[received] = '\0';
+    return ESP_OK;
+}
+
+static esp_err_t control_send_error(httpd_req_t *req, esp_err_t error)
+{
+    int status_code = 500;
+    const char *status_text = "500 Internal Server Error";
+    const char *message = "Control request failed";
+    if (error == ESP_ERR_INVALID_ARG) {
+        status_code = 400;
+        status_text = "400 Bad Request";
+        message = "Invalid control request";
+    } else if (error == ESP_ERR_INVALID_STATE) {
+        status_code = 409;
+        status_text = "409 Conflict";
+        message = "Control is not available in the current state";
+    } else if (error == ESP_ERR_TIMEOUT) {
+        status_code = 503;
+        status_text = "503 Service Unavailable";
+        message = "Control queue is full";
+    }
+    char json[160];
+    snprintf(json, sizeof(json), "{\"accepted\":false,\"status\":%d,\"error\":\"%s\"}",
+             status_code, message);
+    httpd_resp_set_status(req, status_text);
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t control_send_accepted(httpd_req_t *req, uint32_t request_id)
+{
+    char json[96];
+    snprintf(json, sizeof(json), "{\"accepted\":true,\"request_id\":%u}",
+             (unsigned)request_id);
+    httpd_resp_set_status(req, "202 Accepted");
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+}
+
+static bool control_function_id_from_name(const char *name, uint8_t *function_id)
+{
+    if (name == NULL || function_id == NULL) {
+        return false;
+    }
+    struct function_name {
+        const char *name;
+        uint8_t id;
+    };
+    static const struct function_name names[] = {
+        {"dcv", 1}, {"acv", 2}, {"dcma", 3}, {"dca", 4},
+        {"acma", 5}, {"aca", 6}, {"resistance", 7}, {"continuity", 8},
+        {"dc_power", 9}, {"ac_power", 10}, {"diode", 11},
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (strcmp(name, names[i].name) == 0) {
+            *function_id = names[i].id;
+            return true;
+        }
+    }
+    return false;
+}
+
+static esp_err_t control_api_get_handler(httpd_req_t *req)
+{
+    control_state_t state;
+    measurement_snapshot_t snapshot = {0};
+    bool held = false;
+    bool sample_available = control_get_display_snapshot(&snapshot, &held) &&
+                            snapshot.timestamp_ms != 0;
+    if (!control_get_state(&state)) {
+        return control_send_error(req, ESP_ERR_INVALID_STATE);
+    }
+    char json[768];
+    int length = snprintf(json, sizeof(json),
+                          "{\"function_id\":%u,\"function\":\"%s\","
+                          "\"range\":%u,\"range_label\":\"%s\","
+                          "\"report_period_ms\":%u,\"hold\":%s,"
+                          "\"function_pending\":%s,\"zero_pending\":%s,"
+                          "\"last_command_ok\":%s,\"last_mark_sequence\":%u,"
+                          "\"request_id\":%u,\"generation\":%u,\"last_error\":%d,"
+                          "\"sample_available\":%s}",
+                          (unsigned)state.function_id, measurement_function_name(state.function_id),
+                          (unsigned)state.range, measurement_range_name(state.range),
+                          (unsigned)state.report_period_100ms * 100U,
+                          state.hold ? "true" : "false",
+                          state.function_pending ? "true" : "false",
+                          state.zero_pending ? "true" : "false",
+                          state.last_command_ok ? "true" : "false",
+                          (unsigned)state.last_mark_sequence,
+                          (unsigned)state.request_id,
+                          (unsigned)state.generation,
+                          state.last_error,
+                          sample_available ? "true" : "false");
+    if (length < 0 || (size_t)length >= sizeof(json)) {
+        return control_send_error(req, ESP_ERR_NO_MEM);
+    }
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, length);
+}
+
+static esp_err_t control_function_post_handler(httpd_req_t *req)
+{
+    char body[128];
+    char value[32];
+    uint8_t function_id = 0;
+    if (control_read_form(req, body, sizeof(body)) != ESP_OK) {
+        return control_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+    if (form_get_value(body, "function_id", value, sizeof(value))) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(value, &end, 10);
+        if (*value == '\0' || end == value || *end != '\0' || parsed > 255) {
+            return control_send_error(req, ESP_ERR_INVALID_ARG);
+        }
+        function_id = (uint8_t)parsed;
+    } else if (form_get_value(body, "function", value, sizeof(value))) {
+        if (!control_function_id_from_name(value, &function_id)) {
+            return control_send_error(req, ESP_ERR_INVALID_ARG);
+        }
+    } else {
+        return control_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+    uint32_t request_id = 0;
+    esp_err_t err = control_submit_function(function_id, &request_id);
+    return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
+}
+
+static esp_err_t control_period_post_handler(httpd_req_t *req)
+{
+    char body[64];
+    char value[24];
+    if (control_read_form(req, body, sizeof(body)) != ESP_OK ||
+        !form_get_value(body, "period_ms", value, sizeof(value))) {
+        return control_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+    char *end = NULL;
+    unsigned long parsed = strtoul(value, &end, 10);
+    if (*value == '\0' || end == value || *end != '\0' || parsed > UINT32_MAX) {
+        return control_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+    uint32_t request_id = 0;
+    esp_err_t err = control_submit_report_period_ms((uint32_t)parsed, &request_id);
+    return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
+}
+
+static esp_err_t control_hold_post_handler(httpd_req_t *req)
+{
+    char body[64];
+    char value[8];
+    if (control_read_form(req, body, sizeof(body)) != ESP_OK ||
+        !form_get_value(body, "enabled", value, sizeof(value)) ||
+        (strcmp(value, "0") != 0 && strcmp(value, "1") != 0)) {
+        return control_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+    uint32_t request_id = 0;
+    esp_err_t err = control_submit_hold(strcmp(value, "1") == 0, &request_id);
+    return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
+}
+
+static esp_err_t control_zero_post_handler(httpd_req_t *req)
+{
+    uint32_t request_id = 0;
+    esp_err_t err = control_submit_zero(&request_id);
+    return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
+}
+
+static esp_err_t control_mark_post_handler(httpd_req_t *req)
+{
+    uint32_t request_id = 0;
+    esp_err_t err = control_submit_mark(&request_id);
+    return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
 }
 
 static esp_err_t status_page_get_handler(httpd_req_t *req)
@@ -1221,6 +1449,7 @@ static void status_httpd_start(void)
     }
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
+    config.max_uri_handlers = 12;
     if (httpd_start(&status_httpd, &config) != ESP_OK) {
         status_httpd = NULL;
         ESP_LOGE(WIFINET, "failed to start Wi-Fi status web server");
@@ -1244,13 +1473,61 @@ static void status_httpd_start(void)
         .handler = measurement_api_get_handler,
         .user_ctx = NULL,
     };
+    static const httpd_uri_t control_get_uri = {
+        .uri = "/api/control",
+        .method = HTTP_GET,
+        .handler = control_api_get_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t control_function_uri = {
+        .uri = "/api/control/function",
+        .method = HTTP_POST,
+        .handler = control_function_post_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t control_period_uri = {
+        .uri = "/api/control/period",
+        .method = HTTP_POST,
+        .handler = control_period_post_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t control_hold_uri = {
+        .uri = "/api/control/hold",
+        .method = HTTP_POST,
+        .handler = control_hold_post_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t control_zero_uri = {
+        .uri = "/api/control/zero",
+        .method = HTTP_POST,
+        .handler = control_zero_post_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t control_mark_uri = {
+        .uri = "/api/control/mark",
+        .method = HTTP_POST,
+        .handler = control_mark_post_handler,
+        .user_ctx = NULL,
+    };
     esp_err_t page_err = httpd_register_uri_handler(status_httpd, &page_uri);
     esp_err_t api_err = httpd_register_uri_handler(status_httpd, &api_uri);
     esp_err_t measurement_err = httpd_register_uri_handler(status_httpd, &measurement_uri);
-    if (page_err != ESP_OK || api_err != ESP_OK || measurement_err != ESP_OK) {
-        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s",
+    esp_err_t control_get_err = httpd_register_uri_handler(status_httpd, &control_get_uri);
+    esp_err_t control_function_err = httpd_register_uri_handler(status_httpd, &control_function_uri);
+    esp_err_t control_period_err = httpd_register_uri_handler(status_httpd, &control_period_uri);
+    esp_err_t control_hold_err = httpd_register_uri_handler(status_httpd, &control_hold_uri);
+    esp_err_t control_zero_err = httpd_register_uri_handler(status_httpd, &control_zero_uri);
+    esp_err_t control_mark_err = httpd_register_uri_handler(status_httpd, &control_mark_uri);
+    if (page_err != ESP_OK || api_err != ESP_OK || measurement_err != ESP_OK ||
+        control_get_err != ESP_OK || control_function_err != ESP_OK ||
+        control_period_err != ESP_OK || control_hold_err != ESP_OK ||
+        control_zero_err != ESP_OK || control_mark_err != ESP_OK) {
+        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s control_get=%s function=%s period=%s hold=%s zero=%s mark=%s",
                  esp_err_to_name(page_err), esp_err_to_name(api_err),
-                 esp_err_to_name(measurement_err));
+                 esp_err_to_name(measurement_err), esp_err_to_name(control_get_err),
+                 esp_err_to_name(control_function_err), esp_err_to_name(control_period_err),
+                 esp_err_to_name(control_hold_err), esp_err_to_name(control_zero_err),
+                 esp_err_to_name(control_mark_err));
         status_httpd_stop();
         return;
     }

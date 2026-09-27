@@ -36,6 +36,7 @@
 #include "driver/timer.h"
 #include "driver/ledc.h"
 #include "adc_dac.h"
+#include "control.h"
 #include "wifinet.h"
 #include "switch_fun.h"
 #include "ota.h"

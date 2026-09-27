@@ -196,8 +196,7 @@ void KeyScan()
 
                if(net_state == 2) //Server connected; press the button to mark the measurement
                {
-                  evt=WIFINET_MARK;
-                  xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
+                  control_submit_mark(NULL);
                } 
 			 }
 		}   

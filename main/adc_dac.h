@@ -29,6 +29,7 @@ typedef struct {
 } measurement_snapshot_t;
 
 bool measurement_get_snapshot(measurement_snapshot_t *snapshot);
+void measurement_invalidate_snapshot(void);
 void adc_task(void *arg);
 void set_current_freq();
 

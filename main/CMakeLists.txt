@@ -1,5 +1,6 @@
 idf_component_register(SRCS 
 "main.c"
+"control.c"
 "adc_dac.c"
 "wifinet.c"
 "switch_fun.c"

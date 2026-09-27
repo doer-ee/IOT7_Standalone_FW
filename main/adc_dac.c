@@ -29,7 +29,7 @@ bool measurement_get_snapshot(measurement_snapshot_t *snapshot)
     return snapshot->timestamp_ms != 0;
 }
 
-static void measurement_clear_snapshot(void)
+void measurement_invalidate_snapshot(void)
 {
     portENTER_CRITICAL(&measurement_mux);
     latest_measurement.valid = 0;
@@ -1190,6 +1190,10 @@ void esp_timer_batt_cb(void *arg){
 }
 
 void set_current_freq(){
+    if (esp_timer_handle_txdata == NULL) {
+        ESP_LOGW(ADC_TASK_TAG, "Report timer is not initialized; period will apply after startup");
+        return;
+    }
     esp_timer_stop(esp_timer_handle_txdata);
     esp_timer_start_periodic(esp_timer_handle_txdata, current_freq * 100* 1000);
 }
@@ -1248,7 +1252,7 @@ void adc_task(void *arg)
 
 	if(current_fun_old!=current_fun)
 	{
-        measurement_clear_snapshot();
+        measurement_invalidate_snapshot();
         power_add = 0;
 		current_fun_old=current_fun;
 		if(current_fun==8)
@@ -1277,7 +1281,7 @@ void adc_task(void *arg)
                 continue;
             }
             if (adc_value == ADC_READ_ERROR) {
-                measurement_clear_snapshot();
+                measurement_invalidate_snapshot();
                 continue;
             }
 			measure_beep(adc_value);	
@@ -1290,7 +1294,7 @@ void adc_task(void *arg)
                 continue;
             }
             if (adc_value == ADC_READ_ERROR) {
-                measurement_clear_snapshot();
+                measurement_invalidate_snapshot();
                 continue;
             }
 		    //ESP_LOGI(ADC_TASK_TAG,"ADC=%d\r\n",adc_value);
@@ -1331,8 +1335,13 @@ void adc_task(void *arg)
 					break;
 				}
 	}
+    bool range_ready = measurement_range_matches_function(sample_function, sample_range);
+    bool sample_overrange = measured_value == UINT32_MAX;
+    bool sample_valid = unit != 0 && !sample_overrange;
+    control_notify_sample(sample_function, current_sw, sample_valid, sample_overrange, range_ready);
+
     // Power modes publish only after a complete voltage/current measurement cycle.
-    if (measurement_range_matches_function(sample_function, sample_range) &&
+    if (range_ready &&
         ((sample_function != 9 && sample_function != 10) || power_add == 0)) {
         measurement_publish(sample_function, sample_range);
     }

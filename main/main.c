@@ -127,7 +127,7 @@ void usart0_task(void *arg)
          if(ls!=0)
          {
             printf( "%s OK\r\n", data);
-            current_fun=1;
+            control_submit_function(1, NULL);
             beep_start(2);
          }
 
@@ -135,7 +135,7 @@ void usart0_task(void *arg)
          if(ls!=0)
          {
             printf( "%s OK\r\n", data);
-            current_fun=3;
+            control_submit_function(3, NULL);
             beep_start(2);
          }
 
@@ -143,7 +143,7 @@ void usart0_task(void *arg)
          if(ls!=0)
          {
             printf( "%s OK\r\n", data);
-            current_fun=4;
+            control_submit_function(4, NULL);
             beep_start(2);
          }
 
@@ -151,7 +151,7 @@ void usart0_task(void *arg)
          if(ls!=0)
          {
             printf( "%s OK\r\n", data);
-            current_fun=7;
+            control_submit_function(7, NULL);
             beep_start(2);
          }
 
@@ -159,7 +159,7 @@ void usart0_task(void *arg)
          if(ls!=0)
          {
             printf( "%s OK\r\n", data);
-            Zero_b=1;
+            control_submit_zero(NULL);
             beep_start(2);
          }
 
@@ -414,8 +414,9 @@ void app_main(void)
 		ESP_ERROR_CHECK(nvs_flash_erase());
 		ret = nvs_flash_init();
 	}
-	ESP_ERROR_CHECK(ret);
+    ESP_ERROR_CHECK(ret);
     read_config_in_nvs();//Read configuration
+    control_init();
     printf("Version=%s\n", ver);
     printf("device_ID = %s\n",device_ID);
 
