@@ -5,6 +5,9 @@
 #define    PRINTF_VALUE    0  //Enable measurement logging
 #define ADC_READ_ERROR UINT32_MAX
 #define ADC_NOT_READY (UINT32_MAX - 1U)
+#define CONTINUITY_POLL_DELAY_MS 5
+#define CONTINUITY_RANGE_SETTLE_MS 20
+#define MCP3421_I2C_TIMEOUT_MS 20
 
 
 const char *ADC_TASK_TAG = "ADC_TASK";
@@ -17,6 +20,16 @@ uint8_t unit = 0; //Measurement unit
 
 static portMUX_TYPE measurement_mux = portMUX_INITIALIZER_UNLOCKED;
 static measurement_snapshot_t latest_measurement;
+static bool continuity_alarm_on;
+
+static void continuity_alarm_set(bool enabled)
+{
+    if (continuity_alarm_on == enabled) {
+        return;
+    }
+    continuity_alarm_on = enabled;
+    gpio_set_level(BEEP, enabled ? 1 : 0);
+}
 
 bool measurement_get_snapshot(measurement_snapshot_t *snapshot)
 {
@@ -88,7 +101,8 @@ void MCP3421_WriteReg(uint8_t writeData)
    i2c_master_write_byte(cmd, 0xD0, 1);
    i2c_master_write_byte(cmd, writeData, 1);
    i2c_master_stop(cmd);
-   esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
+   esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd,
+                                        pdMS_TO_TICKS(MCP3421_I2C_TIMEOUT_MS));
    if (ret != ESP_OK) {
        ESP_LOGI(ADC_TASK_TAG, "MCP3421_WriteReg ERROR =%d",ret);
    }
@@ -113,7 +127,8 @@ uint32_t MCP3421_ReadReg(void)
    i2c_master_read(cmd, &elec[2],1,0x00);
    i2c_master_read(cmd, &elec[3],1,0x01);
    i2c_master_stop(cmd);
-   esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
+   esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd,
+                                        pdMS_TO_TICKS(MCP3421_I2C_TIMEOUT_MS));
    if (ret != ESP_OK) {
        ESP_LOGW(ADC_TASK_TAG, "MCP3421_ReadReg failed: %s", esp_err_to_name(ret));
        i2c_cmd_link_delete(cmd);
@@ -775,7 +790,6 @@ void measure_beep(uint32_t ad_dat)
 	  uint64_t Vol;
 	  uint64_t r=0;
 	  int lsdat=0;
-	  static uint8_t beep_b=0;
 	
 		lsdat=((int)(ad_dat<<14));
 
@@ -785,11 +799,7 @@ void measure_beep(uint32_t ad_dat)
 		   sign=1;
 			 unit=0x00;	
 			 measured_value=0xFFFFFFFF;
-			if(beep_b==1)
-			{
-				beep_b=0;
-				gpio_set_level(BEEP, 0);
-			}
+			continuity_alarm_set(false);
 		}
 	  else if(lsdat<0)//Resistance-range voltage cannot be negative
 		{
@@ -798,11 +808,7 @@ void measure_beep(uint32_t ad_dat)
 			 sign=1;
 			 unit=0x00;
 			 measured_value=0;
-			 if(beep_b==1)
-			{
-				beep_b=0;
-				gpio_set_level(BEEP, 0);
-			}
+			 continuity_alarm_set(false);
 		}
 		else
 		{ 
@@ -819,8 +825,7 @@ void measure_beep(uint32_t ad_dat)
 				else
 				{
 				    analog_switch(ASW_BEEP);
-					vTaskDelay(pdMS_TO_TICKS(100));
-					MCP3421_ReadReg();
+					vTaskDelay(pdMS_TO_TICKS(CONTINUITY_RANGE_SETTLE_MS));
 					r=0xFFFFFFFF;
 					  
 				}
@@ -831,21 +836,13 @@ void measure_beep(uint32_t ad_dat)
 				{
 						unit=0x09;
 						measured_value=r;
-					  	if(beep_b==0)
-						{
-							beep_b=1;
-							gpio_set_level(BEEP, 1);
-						}
+						continuity_alarm_set(true);
 				}
 				else 
 				{
 						unit=0x00;
 						measured_value=0xFFFFFFFF;
-					  	if(beep_b==1)
-						{
-							beep_b=0;
-							gpio_set_level(BEEP, 0);
-						}
+						continuity_alarm_set(false);
 				}
 				
 		}	
@@ -1254,10 +1251,14 @@ void adc_task(void *arg)
 	{
         measurement_invalidate_snapshot();
         power_add = 0;
+		if (current_fun_old == 8) {
+			continuity_alarm_set(false);
+		}
 		current_fun_old=current_fun;
 		if(current_fun==8)
 		{
-			vTaskDelay(pdMS_TO_TICKS(100));
+			analog_switch(ASW_BEEP);
+			vTaskDelay(pdMS_TO_TICKS(CONTINUITY_RANGE_SETTLE_MS));
 			MCP3421_WriteReg(0x94);//60 samples per second
 			ESP_LOGI(ADC_TASK_TAG,"qie1\r\n");
 			
@@ -1275,13 +1276,14 @@ void adc_task(void *arg)
     const uint8_t sample_range = current_sw;
     if(sample_function==8)
 	{
-		vTaskDelay(pdMS_TO_TICKS(50));
-			adc_value = MCP3421_ReadReg();
+		vTaskDelay(pdMS_TO_TICKS(CONTINUITY_POLL_DELAY_MS));
+		adc_value = MCP3421_ReadReg();
             if (adc_value == ADC_NOT_READY) {
                 continue;
             }
             if (adc_value == ADC_READ_ERROR) {
                 measurement_invalidate_snapshot();
+				continuity_alarm_set(false);
                 continue;
             }
 			measure_beep(adc_value);	
