@@ -1,0 +1,6 @@
+build/
+build-*/
+*.log
+sdkconfig.old
+
+# Keep the active sdkconfig in the baseline commit for reproducible builds.

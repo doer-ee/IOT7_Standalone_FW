@@ -1,0 +1,25 @@
+idf_component_register(SRCS 
+"main.c"
+"adc_dac.c"
+"wifinet.c"
+"switch_fun.c"
+"ota.c"
+INCLUDE_DIRS ""
+REQUIRES
+    app_update
+    driver
+    esp_adc_cal
+    esp_event
+    esp_http_server
+    esp_netif
+    esp_system
+    esp_timer
+    esp_wifi
+    esp_https_ota
+    fatfs
+    freertos
+    mbedtls
+    mqtt
+    nvs_flash
+    sdmmc
+    tcpip_adapter)
