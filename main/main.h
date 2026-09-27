@@ -1,5 +1,6 @@
 #ifndef MAIN_H
 #define MAIN_H
+#include "feature_flags.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,8 +15,12 @@
 #include "esp_netif.h"
 #include "esp_https_ota.h"
 #include "esp_ota_ops.h"
+#if IOT7_ENABLE_SMARTCONFIG
 #include "esp_smartconfig.h"
+#endif
+#if IOT7_ENABLE_LEGACY_MQTT
 #include "mqtt_client.h"
+#endif
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "driver/rtc_io.h"

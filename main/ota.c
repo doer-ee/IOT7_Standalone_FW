@@ -1,6 +1,8 @@
 #include "main.h"
 #include "ota.h"
 
+#if IOT7_ENABLE_CLOUD_OTA
+
 const char *TAG  = "OTA";
 
 char updata_url[]="http://xxx.xxx.xxx/ota.bin";
@@ -98,3 +100,4 @@ ota_end:
         vTaskDelete(NULL); 
     }
 }
+#endif

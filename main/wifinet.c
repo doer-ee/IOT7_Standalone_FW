@@ -10,28 +10,33 @@ const char *WIFINET = "WIFINET";
 
 xQueueHandle wifinet_evt_queue;
 
+#if IOT7_ENABLE_LEGACY_MQTT
 esp_mqtt_client_handle_t client;
-
 char server_url[]="xxx.xxxx.xxx";
-char device_ID[]="0000000000";
 char mqtt_password[]="312c319b9f6c104b1b9d516c0f01ef45";
 char mqtt_tx_topic[]="device_txd/0000000000";
 char mqtt_rx_topic[]="device_rxd/0000000000";
+#endif
+char device_ID[]="0000000000";
 
 uint8_t net_state=0;   //Network state: 0=router disconnected, 1=router connected, 2=server connected
+static const int CONNECTED_BIT = BIT0;
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
+#if IOT7_ENABLE_SMARTCONFIG
 static EventGroupHandle_t s_wifi_event_group;
 
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
    to the AP with an IP? */
-static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
 
 static void smartconfig_example_task(void * parm);
+#endif
 
+#if IOT7_ENABLE_OPTICAL_PROVISIONING
 uint8_t sen=0;
 uint8_t add=0;
+#endif
 uint8_t progress=0;
 uint8_t wait=0;
 uint8_t time_state=0;
@@ -71,6 +76,7 @@ static const char *wifi_disconnect_reason_name(uint8_t reason);
 static void wifi_connect_with_log(const char *source);
 
 
+#if IOT7_ENABLE_LEGACY_MQTT
 //Pack data into Data_Buffer
 void DataCombine( uint16_t com, uint8_t sn, uint8_t *data, uint16_t data_len )
 {
@@ -258,6 +264,7 @@ uint8_t conversion_fun_id(uint8_t fun)
     }
     return 0x00;
 }
+#endif
 
 
 void sntp_set_time_sync_callback(struct timeval *tv)
@@ -274,7 +281,6 @@ void sntp_set_time_sync_callback(struct timeval *tv)
 
 static void esp_initialize_sntp(void)
 {
-    char strftime_buf[64];
     ESP_LOGI(WIFINET, "Initializing SNTP");
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "ntp.aliyun.com");
@@ -319,8 +325,8 @@ void start_config_router()
     }
 }
 
+#if IOT7_ENABLE_OPTICAL_PROVISIONING
 uint8_t ch=0;
-
 char ls_wifi_ssid[32];
 char ls_wifi_pass[32];
 
@@ -457,12 +463,14 @@ void config_router_timer_cb(void *arg)
 }  
 esp_timer_handle_t config_router_timer_handle = 0;
 //Define a periodically repeating timer structure
-esp_timer_create_args_t config_router_periodic_arg = { 
+esp_timer_create_args_t config_router_periodic_arg = {
         .callback = &config_router_timer_cb, // Callback function
 		.arg = NULL, // No argument
 		.name = "config_router_timer" // Timer name
 		};
+#endif
 
+#if IOT7_ENABLE_SMARTCONFIG
 // In event_handler, perform the corresponding operation for each event.
 static void event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data)
@@ -552,9 +560,11 @@ static void smartconfig_example_task(void * parm)
        }
    }
 }
+#endif
 
 
 
+#if IOT7_ENABLE_LEGACY_MQTT
 static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
 {
     int msg_id;
@@ -725,6 +735,7 @@ static void mqtt_app_start(void)
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
     esp_mqtt_client_start(client);
 }
+#endif
 
 
 
@@ -767,7 +778,6 @@ static void wifi_connect_with_log(const char *source)
 //Wi-Fi event
 static esp_err_t event_handler2(void *ctx, system_event_t *event)
 {
-    uint8_t evt;
     switch (event->event_id) {
         case SYSTEM_EVENT_STA_START:
             ESP_LOGI(WIFINET, "STA started");
@@ -789,27 +799,11 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
             // device reconnects and reports the current state through JSON.
             status_httpd_start();
 
-            if(progress==PROG_CONNECTED)
-            {
-                progress=PROG_CONNECTED_OK;
-
-                // Web provisioning already committed its credentials. The old
-                // optical provisioning buffers are empty in that path and must
-                // not overwrite the saved NVS values after GOT_IP.
-                if (ls_wifi_ssid[0] != '\0') {
-                    strlcpy(wifi_ssid, ls_wifi_ssid, sizeof(wifi_ssid));
-                    nvs_handle_t wificonfig_set_handle;
-                    ESP_ERROR_CHECK(nvs_open("wificonfig", NVS_READWRITE, &wificonfig_set_handle));
-                    ESP_ERROR_CHECK(nvs_set_str(wificonfig_set_handle, "SSID", ls_wifi_ssid));
-                    ESP_ERROR_CHECK(nvs_set_str(wificonfig_set_handle, "PASSWORD", ls_wifi_pass));
-                    ESP_ERROR_CHECK(nvs_commit(wificonfig_set_handle));
-                    nvs_close(wificonfig_set_handle);
-                    ESP_LOGI(WIFINET, "Optical Wi-Fi settings committed after connection");
-                } else {
-                    ESP_LOGI(WIFINET, "Web Wi-Fi settings retained after connection");
-                }
+            if (progress == PROG_CONNECTED) {
+                progress = PROG_CONNECTED_OK;
             }
 
+#if IOT7_ENABLE_LEGACY_MQTT
             if (client) {
                 esp_mqtt_client_reconnect(client);
             }
@@ -817,6 +811,9 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
             {
                 mqtt_app_start();
             }
+#else
+            ESP_LOGI(WIFINET, "Legacy MQTT disabled; local Web UI remains available");
+#endif
             
             xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
             if(time_state==0) esp_initialize_sntp();
@@ -1780,6 +1777,7 @@ void app_wifi_initialise(void)
     }
 }
 
+#if IOT7_ENABLE_LEGACY_MQTT
 // Periodically send meter hardware information
 esp_timer_handle_t esp_timer_handle_txinfo = 0;
 /* Timer interrupt callback */
@@ -1789,7 +1787,9 @@ void esp_timer_txinfo_cb(void *arg){
     evt=WIFINET_INFO;
     xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
 }
+#endif
 
+#if IOT7_ENABLE_OPTICAL_PROVISIONING
 // Connect to the router using the received router credentials
 void wifi_connecting_routers(void)
 {
@@ -1805,22 +1805,24 @@ void wifi_connecting_routers(void)
     ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
     ESP_ERROR_CHECK( esp_wifi_connect() );
 }
+#endif
 
 
 
 void wifinet_task(void *arg)
 {
     uint8_t evt;
+#if IOT7_ENABLE_LEGACY_MQTT
     time_t now;
-    int i=0;
     long totalSeconds;
     uint8_t tx_buf[128];
     uint8_t sn_count=0;
     uint8_t fun=0;
+#endif
     wifinet_evt_queue = xQueueCreate(3, sizeof(uint8_t));
-    //vTaskDelay(pdMS_TO_TICKS(1000));
-    //initialise_wifi();                   // Initialize Wi-Fi in STA mode and wait for app provisioning
+#if IOT7_ENABLE_OPTICAL_PROVISIONING
     esp_timer_create(&config_router_periodic_arg, &config_router_timer_handle);
+#endif
     while(wait==0)
     {
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -1832,6 +1834,7 @@ void wifinet_task(void *arg)
     }
     
 
+#if IOT7_ENABLE_LEGACY_MQTT
         // Initialize the timer structure
     esp_timer_create_args_t esp_timer_create_args_txinfo = {
         .callback = &esp_timer_txinfo_cb, // Timer callback function
@@ -1842,6 +1845,7 @@ void wifinet_task(void *arg)
     /* Create timer */
     esp_err_t err = esp_timer_create(&esp_timer_create_args_txinfo, &esp_timer_handle_txinfo);
     err = esp_timer_start_periodic(esp_timer_handle_txinfo, 3000 * 1000);
+#endif
     while (1) 
     {
         if (xQueueReceive(wifinet_evt_queue, &evt, portMAX_DELAY))
@@ -1852,6 +1856,7 @@ void wifinet_task(void *arg)
                     wifi_config_ap_start();
                     break;
 
+#if IOT7_ENABLE_LEGACY_MQTT
                 case WIFINET_INFO: //Send meter information
 
                     switch (current_fun)
@@ -1906,17 +1911,19 @@ void wifinet_task(void *arg)
 
                 case WIFINET_MARK: //Mark the meter reading
                     tx_buf[0]=0x01;
-                    DataCombine(0x080B,sn_count++,tx_buf,1);   
+                    DataCombine(0x080B,sn_count++,tx_buf,1);
                 break;
-
+#if IOT7_ENABLE_CLOUD_OTA
                 case WIFINET_OTA: // Firmware upgrade
                      xTaskCreate(&ota_task, "ota_task", 1024 * 8, NULL, 20, NULL);
                 break;
 
                 case WIFINET_OTA_PRO: // Firmware upgrade progress
                     tx_buf[0]=percentage;
-                    DataCombine(0x070A,sn_count++,tx_buf,1);   
+                    DataCombine(0x070A,sn_count++,tx_buf,1);
                 break;
+#endif
+#endif
             }
             
         }

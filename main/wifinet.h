@@ -1,22 +1,25 @@
 #ifndef WIFINET_H
 #define WIFINET_H
 
-extern esp_timer_handle_t config_router_timer_handle ;
+#if IOT7_ENABLE_OPTICAL_PROVISIONING
+extern esp_timer_handle_t config_router_timer_handle;
 extern esp_timer_create_args_t config_router_periodic_arg;
+extern char ls_wifi_ssid[32];
+extern char ls_wifi_pass[32];
+void wifi_connecting_routers(void);
+#endif
 
 extern xQueueHandle wifinet_evt_queue;
 
 extern uint8_t progress;
 
-extern char ls_wifi_ssid[32];
-extern char ls_wifi_pass[32];
-
-
 extern char wifi_ssid[32];
 extern char wifi_pass[64];
 
 extern char device_ID[11];
+#if IOT7_ENABLE_LEGACY_MQTT
 extern char mqtt_password[33];
+#endif
 
 extern uint8_t net_state;
 extern uint8_t time_state;
@@ -47,7 +50,6 @@ enum WIFINET
     WIFINET_CONFIG_AP, //Reopen the web provisioning hotspot
 };
 
-void wifi_connecting_routers(void);
 void wifinet_task(void *arg);
 void start_config_router();
 void app_wifi_initialise(void);

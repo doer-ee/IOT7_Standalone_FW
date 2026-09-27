@@ -1029,6 +1029,7 @@ void measure_diode(uint32_t ad_dat)
 
 
 
+#if IOT7_ENABLE_LEGACY_MQTT
 //Send measurements to the network periodically
 esp_timer_handle_t esp_timer_handle_txdata = 0;
 /* Timer interrupt callback */
@@ -1038,6 +1039,7 @@ void esp_timer_txdata_cb(void *arg){
 	xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
 	//ESP_LOGI(ADC_TASK_TAG, "TX DATA");
 }
+#endif
 
 
 uint16_t pwroff_t_add=0;
@@ -1045,10 +1047,10 @@ uint16_t pwroff_t_add=0;
 esp_timer_handle_t esp_timer_handle_batt = 0;
 /* Timer interrupt callback */
 void esp_timer_batt_cb(void *arg){
+#if IOT7_ENABLE_LEGACY_MQTT
 	uint8_t evt;
-	int b_add=0;
- 	 int val;
-    esp_err_t r;
+#endif
+	int val;
 	int batt_v;
 
 	val = (adc1_get_raw(ADC1_CHANNEL_1) & 0x1FFF);//Keep the lowest 13 bits
@@ -1062,8 +1064,10 @@ void esp_timer_batt_cb(void *arg){
 	{
 		if(batt_v<3200)
 		{
+#if IOT7_ENABLE_LEGACY_MQTT
 			evt=WIFINET_MQTTSTOP;
             xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
+#endif
 			gpio_set_level(BEEP, 1);
 			vTaskDelay(pdMS_TO_TICKS(100));
 			gpio_set_level(BEEP, 0);
@@ -1124,8 +1128,10 @@ void esp_timer_batt_cb(void *arg){
 				}
 				if(--pwroff_t_add==0) //Power off after 10 minutes at low battery
 				{
+#if IOT7_ENABLE_LEGACY_MQTT
 					evt=WIFINET_MQTTSTOP;
-            		xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
+                    xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
+#endif
 					gpio_set_level(BEEP, 1);
 					vTaskDelay(pdMS_TO_TICKS(100));
 					gpio_set_level(BEEP, 0);
@@ -1187,12 +1193,14 @@ void esp_timer_batt_cb(void *arg){
 }
 
 void set_current_freq(){
+#if IOT7_ENABLE_LEGACY_MQTT
     if (esp_timer_handle_txdata == NULL) {
         ESP_LOGW(ADC_TASK_TAG, "Report timer is not initialized; period will apply after startup");
         return;
     }
     esp_timer_stop(esp_timer_handle_txdata);
     esp_timer_start_periodic(esp_timer_handle_txdata, current_freq * 100* 1000);
+#endif
 }
 
 
@@ -1200,11 +1208,6 @@ void set_current_freq(){
 void adc_task(void *arg)
 {
   uint32_t adc_value;
-  int lsdat=0;
-  long Vol;
-  
-   
-   uint8_t evt;
   I2C_Init();
 
   adc1_config_width(ADC_WIDTH_BIT_13);//The RTC controller supports only 13 bits
@@ -1213,6 +1216,7 @@ void adc_task(void *arg)
 
 
 
+#if IOT7_ENABLE_LEGACY_MQTT
       // Initialize the timer structure
     esp_timer_create_args_t esp_timer_create_args_txdata = {
         .callback = &esp_timer_txdata_cb, // Timer callback function
@@ -1222,6 +1226,7 @@ void adc_task(void *arg)
    /* Create timer */
     esp_timer_create(&esp_timer_create_args_txdata, &esp_timer_handle_txdata);
     esp_timer_start_periodic(esp_timer_handle_txdata, current_freq * 100* 1000);
+#endif
 
 
 	 // Initialize the timer structure

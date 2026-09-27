@@ -148,8 +148,10 @@ void analog_switch(uint8_t sw)
 
 uint8_t K1Set,K1Cnt;
 void KeyScan()
-{	
+{
+#if IOT7_ENABLE_LEGACY_MQTT
    uint8_t evt;
+#endif
 
 		if(gpio_get_level(KEY)==0) 
 		{		
@@ -162,8 +164,10 @@ void KeyScan()
          { 
                ESP_LOGI(SWITCH_FUN, "Press and hold the key");
                K1Set=0; 
+#if IOT7_ENABLE_LEGACY_MQTT
                evt=WIFINET_MQTTSTOP;
                xQueueSendFromISR(wifinet_evt_queue, &evt, NULL);
+#endif
                gpio_set_level(BEEP, 1);
                vTaskDelay(pdMS_TO_TICKS(100));
                gpio_set_level(BEEP, 0);
@@ -194,7 +198,7 @@ void KeyScan()
                   start_config_router();
                }  
 
-               if(net_state == 2) //Server connected; press the button to mark the measurement
+               if(net_state == 1) //Mark the measurement while connected to the local network
                {
                   control_submit_mark(NULL);
                } 

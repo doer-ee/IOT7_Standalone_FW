@@ -183,6 +183,7 @@ void usart0_task(void *arg)
             beep_start(2);
          }
 
+#if IOT7_ENABLE_LEGACY_MQTT
          ls=strstr(data,"PASS=");
          if(ls!=0)
          {
@@ -194,6 +195,7 @@ void usart0_task(void *arg)
             printf( "mqtt_password=%s\r\n", mqtt_password);
             beep_start(2);
          }
+#endif
       }
    }
 }
@@ -211,7 +213,9 @@ void write_config_in_nvs()
     ESP_ERROR_CHECK( nvs_set_u8(config_get_handle,"Alreadysaved", Already_saved) );
 
     ESP_ERROR_CHECK( nvs_set_str(config_get_handle,"device_ID",(const char *)device_ID) );
+#if IOT7_ENABLE_LEGACY_MQTT
     ESP_ERROR_CHECK( nvs_set_str(config_get_handle,"password",(const char *)mqtt_password) );
+#endif
 
     ESP_ERROR_CHECK( nvs_set_u16(config_get_handle,"c_freq", current_freq) );
     ESP_ERROR_CHECK( nvs_set_u8(config_get_handle,"c_fun", current_fun) );
@@ -269,8 +273,10 @@ static void read_config_in_nvs(void)
         Len = sizeof(device_ID);
         nvs_get_str(config_get_handle, "device_ID", (char *)device_ID, &Len);
 
+#if IOT7_ENABLE_LEGACY_MQTT
         Len = sizeof(mqtt_password);
         nvs_get_str(config_get_handle, "password", (char *)mqtt_password, &Len);
+#endif
 
         nvs_get_u16(config_get_handle, "c_freq", &current_freq);
         if((current_freq<2)||(current_freq>60000)) current_freq=5;

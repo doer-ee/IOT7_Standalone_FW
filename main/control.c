@@ -129,7 +129,6 @@ static void control_apply_mark(const control_command_t *command)
 {
     measurement_snapshot_t snapshot = {0};
     bool have_snapshot = measurement_get_snapshot(&snapshot);
-    uint8_t event = WIFINET_MARK;
 
     control_begin_command(command);
     if (!have_snapshot || snapshot.timestamp_ms == 0) {
@@ -140,9 +139,12 @@ static void control_apply_mark(const control_command_t *command)
     portENTER_CRITICAL(&control_mux);
     control_state.last_mark_sequence = snapshot.sequence;
     portEXIT_CRITICAL(&control_mux);
+#if IOT7_ENABLE_LEGACY_MQTT
+    uint8_t event = WIFINET_MARK;
     if (wifinet_evt_queue != NULL && xQueueSend(wifinet_evt_queue, &event, 0) != pdTRUE) {
         ESP_LOGW(CONTROL_TAG, "Legacy MQTT mark event queue is full");
     }
+#endif
     ESP_LOGI(CONTROL_TAG, "Marked sample sequence %u", (unsigned)snapshot.sequence);
 }
 
