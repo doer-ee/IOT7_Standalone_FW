@@ -293,6 +293,25 @@
     el('telegram_form').addEventListener('submit',async event => { event.preventDefault(); try { await post('/api/collection/telegram','token='+encodeURIComponent(el('telegram_token').value)+'&chat='+encodeURIComponent(el('telegram_chat').value.trim())); el('telegram_token').value=''; settingsMessage('Telegram settings saved.'); } catch (error) { settingsMessage('Telegram settings failed: '+error.message,true); } });
     el('telegram_test').addEventListener('click',async()=>{try{await post('/api/collection/telegram/test','');settingsMessage('Telegram test sent.')}catch(e){settingsMessage('Telegram test failed: '+e.message,true)}});
     function otaMessage(message, error) { setText('ota_message',message); el('ota_message').classList.toggle('error',!!error); }
+    function startOtaReloadCountdown() {
+      const deadline=Date.now()+15000;
+      const update=()=>{
+        const remaining=Math.max(0,Math.ceil((deadline-Date.now())/1000));
+        if (remaining>0) {
+          otaMessage('Firmware accepted. The device is restarting. Reloading in '+remaining+' seconds…');
+          return;
+        }
+        clearInterval(countdown);
+        otaMessage('Waiting for the device to reconnect…');
+        const reloadWhenReady=async()=>{
+          try { await getJson('/api/status'); window.location.reload(); }
+          catch (error) { setTimeout(reloadWhenReady,2000); }
+        };
+        reloadWhenReady();
+      };
+      const countdown=setInterval(update,1000);
+      update();
+    }
     el('ota_upload').addEventListener('click',()=>{
       const input=el('ota_file'), file=input.files && input.files[0], button=el('ota_upload'), progress=el('ota_progress');
       if (!file) { otaMessage('Select a firmware .bin file first.',true); return; }
@@ -302,7 +321,7 @@
       const xhr=new XMLHttpRequest(); xhr.open('POST','/api/ota'); xhr.setRequestHeader('Content-Type','application/octet-stream');
       xhr.upload.onprogress=event=>{ if (event.lengthComputable) { const percent=Math.round(event.loaded/event.total*100); progress.value=percent; otaMessage('Uploading firmware… '+percent+'%'); } };
       xhr.onload=()=>{ let result=null; try { result=JSON.parse(xhr.responseText); } catch (error) {}
-        if (xhr.status>=200 && xhr.status<300 && result && result.accepted) { progress.value=100; otaMessage('Firmware accepted. The device is restarting; wait about 15 seconds, then reload the page.'); }
+        if (xhr.status>=200 && xhr.status<300 && result && result.accepted) { progress.value=100; startOtaReloadCountdown(); }
         else { button.disabled=false; input.disabled=false; otaMessage(result && result.error ? result.error : 'Firmware update failed (HTTP '+xhr.status+').',true); }
       };
       xhr.onerror=()=>{ button.disabled=false; input.disabled=false; otaMessage('Firmware upload failed because the connection was lost.',true); };
