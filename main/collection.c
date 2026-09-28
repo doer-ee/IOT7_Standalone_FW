@@ -442,6 +442,13 @@ static void scan_storage(void)
             if (record_valid(&records[local])) summary_apply(&records[local]);
         }
     }
+    // Complete the circular scan with records before the next write slot.
+    if (start_local &&
+        esp_partition_read(col_part, start_sector * COL_SECTOR, scan_buffer, COL_SECTOR) == ESP_OK) {
+        for (uint32_t local = 0; local < start_local; ++local) {
+            if (record_valid(&records[local])) summary_apply(&records[local]);
+        }
+    }
     if (col_cfg.active && col_cfg.function >= 1 && col_cfg.function <= 7) {
         col_summary_t *s = summary_for(col_cfg.session_id, false);
         if (s && s->stopped) { col_cfg.active = 0; cfg_save(); }
