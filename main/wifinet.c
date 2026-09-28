@@ -34,6 +34,9 @@ static httpd_handle_t status_httpd = NULL;
 static bool wifi_stack_ready = false;
 static bool wifi_started = false;
 static volatile bool wifi_sleeping = false;
+static volatile bool wifi_wake_beep_pending = false;
+static bool wifi_wake_request_pending = false;
+static portMUX_TYPE wifi_wake_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t last_web_activity_ms;
 static bool config_apply_started = false;
 static bool wifi_apply_from_web = false;
@@ -66,6 +69,7 @@ static void wifi_config_ap_start(void);
 #define COLLECTION_WIFI_IDLE_MS 180000U
 #define COLLECTION_ALERT_GRACE_MS 60000U
 #define COLLECTION_ALERT_RETRY_MS 1800000U
+#define WIFI_WAKE_CONFIRM_BEEP_TICKS 17U
 
 static uint32_t wifi_uptime_ms(void)
 {
@@ -85,11 +89,23 @@ static bool status_uri_match(const char *reference, const char *uri, size_t leng
     return strlen(reference) == length && strncmp(reference, uri, length) == 0;
 }
 
-void wifinet_request_wake(void)
+bool wifinet_request_wake(void)
 {
-    if (!wifi_sleeping || !wifinet_evt_queue) return;
+    bool should_queue = false;
+    portENTER_CRITICAL(&wifi_wake_mux);
+    if (wifi_sleeping && !wifi_wake_request_pending && wifinet_evt_queue) {
+        wifi_wake_request_pending = true;
+        should_queue = true;
+    }
+    portEXIT_CRITICAL(&wifi_wake_mux);
+    if (!should_queue) return false;
+
     uint8_t event = WIFINET_WAKE_STA;
-    xQueueSend(wifinet_evt_queue, &event, 0);
+    if (xQueueSend(wifinet_evt_queue, &event, 0) == pdTRUE) return true;
+    portENTER_CRITICAL(&wifi_wake_mux);
+    wifi_wake_request_pending = false;
+    portEXIT_CRITICAL(&wifi_wake_mux);
+    return false;
 }
 
 
@@ -183,6 +199,11 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
 
             // Once DHCP completes, expose the local measurement and control UI.
             status_httpd_start();
+            if (wifi_wake_beep_pending && status_httpd != NULL) {
+                wifi_wake_beep_pending = false;
+                beep_start(WIFI_WAKE_CONFIRM_BEEP_TICKS);
+                ESP_LOGI(WIFINET, "Button wake confirmed after the Web UI became available");
+            }
 
             if (!mdns_started) {
                 esp_err_t mdns_err = mdns_init();
@@ -1087,6 +1108,7 @@ static void wifi_config_ap_start_internal(void)
 {
     ESP_ERROR_CHECK(wifi_stack_init_once());
     wifi_sleeping = false;
+    wifi_wake_beep_pending = false;
 
     status_httpd_stop();
 
@@ -1134,6 +1156,7 @@ static void app_wifi_initialise(void)
     size_t Len;
     ESP_ERROR_CHECK(wifi_stack_init_once());
     wifi_sleeping = false;
+    wifi_wake_beep_pending = false;
 
     wifi_config_t wifi_config;
     bzero(&wifi_config, sizeof(wifi_config_t));
@@ -1201,6 +1224,7 @@ static void wifi_collection_sleep(void)
         (uint32_t)(wifi_uptime_ms() - last_web_activity_ms) < COLLECTION_WIFI_IDLE_MS) return;
 
     wifi_sleeping = true;
+    wifi_wake_beep_pending = false;
     status_httpd_stop();
     esp_err_t err = esp_wifi_stop();
     if (err != ESP_OK) {
@@ -1214,14 +1238,16 @@ static void wifi_collection_sleep(void)
     ESP_LOGI(WIFINET, "Wi-Fi paused after 3 minutes without web access; collection continues");
 }
 
-static void wifi_collection_wake(const char *reason)
+static void wifi_collection_wake(const char *reason, bool confirm_with_beep)
 {
     if (!wifi_sleeping || wifi_config_ap_active) return;
     web_activity_note();
+    wifi_wake_beep_pending = confirm_with_beep;
     wifi_sleeping = false;
     esp_err_t err = esp_wifi_start();
     if (err != ESP_OK) {
         wifi_sleeping = true;
+        wifi_wake_beep_pending = false;
         ESP_LOGE(WIFINET, "Unable to resume Wi-Fi: %s", esp_err_to_name(err));
         return;
     }
@@ -1256,7 +1282,10 @@ void wifinet_task(void *arg)
         if (xQueueReceive(wifinet_evt_queue, &evt, pdMS_TO_TICKS(1000)) == pdTRUE) {
             if (evt == WIFINET_CONFIG_AP) wifi_config_ap_start();
             else if (evt == WIFINET_WAKE_STA) {
-                wifi_collection_wake("button press");
+                portENTER_CRITICAL(&wifi_wake_mux);
+                wifi_wake_request_pending = false;
+                portEXIT_CRITICAL(&wifi_wake_mux);
+                wifi_collection_wake("button press", true);
                 button_wake = true;
             }
         }
@@ -1269,12 +1298,12 @@ void wifinet_task(void *arg)
         }
 
         if (wifi_sleeping) {
-            if (!collection_is_active()) wifi_collection_wake("collection ended");
+            if (!collection_is_active()) wifi_collection_wake("collection ended", false);
             else if (alert_pending && (!alert_wake_latched ||
                      (uint32_t)(wifi_uptime_ms() - last_alert_attempt_ms) >= COLLECTION_ALERT_RETRY_MS)) {
                 alert_wake_latched = true;
                 last_alert_attempt_ms = wifi_uptime_ms();
-                wifi_collection_wake("Telegram notification pending");
+                wifi_collection_wake("Telegram notification pending", false);
             }
         } else if (collection_is_active() && wifi_started && !wifi_config_ap_active &&
                    !wifi_reconfiguring && !collection_network_busy() &&

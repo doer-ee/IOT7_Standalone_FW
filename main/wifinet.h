@@ -20,6 +20,6 @@ enum WIFINET
 
 void wifinet_task(void *arg);
 void request_wifi_config_ap(void);
-void wifinet_request_wake(void);
+bool wifinet_request_wake(void);
 
 #endif
