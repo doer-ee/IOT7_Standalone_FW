@@ -169,6 +169,7 @@ bool switch_range_is_locked(uint8_t *range)
 
 
 uint8_t K1Set,K1Cnt;
+#define POWER_ON_HOLD_TICKS 5
 void KeyScan()
 {
 
@@ -257,10 +258,10 @@ void switch_fun_task(void *arg)
 
    wait=0;
 
-   while(1)//Short press to power on
+   while(1)//Hold briefly to power on
    {
       vTaskDelay(pdMS_TO_TICKS(90));
-      if(++key_add > 9) break; //Long press to power on
+      if(++key_add >= POWER_ON_HOLD_TICKS) break;
       if((gpio_get_level(KEY)!=0)) key_add = 0;
    }
    gpio_set_level(PWR_EN, 1);
