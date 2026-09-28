@@ -22,6 +22,8 @@ typedef struct {
 
 void collection_init(void);
 bool collection_is_active(void);
+bool collection_alert_pending(void);
+bool collection_network_busy(void);
 uint8_t collection_active_function(void);
 esp_err_t collection_register_handlers(httpd_handle_t server);
 const char *collection_ntp_server(void);

@@ -33,6 +33,8 @@ static httpd_handle_t config_httpd = NULL;
 static httpd_handle_t status_httpd = NULL;
 static bool wifi_stack_ready = false;
 static bool wifi_started = false;
+static volatile bool wifi_sleeping = false;
+static volatile uint32_t last_web_activity_ms;
 static bool config_apply_started = false;
 static bool wifi_apply_from_web = false;
 static unsigned int wifi_connect_attempts = 0;
@@ -60,6 +62,35 @@ static const char *wifi_disconnect_reason_name(uint8_t reason);
 static void wifi_connect_with_log(const char *source);
 static void app_wifi_initialise(void);
 static void wifi_config_ap_start(void);
+
+#define COLLECTION_WIFI_IDLE_MS 180000U
+#define COLLECTION_ALERT_GRACE_MS 60000U
+#define COLLECTION_ALERT_RETRY_MS 1800000U
+
+static uint32_t wifi_uptime_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+static void web_activity_note(void)
+{
+    last_web_activity_ms = wifi_uptime_ms();
+}
+
+/* The HTTP server invokes this matcher for every request, including requests
+ * handled by the collection module. Keep the default exact-match semantics. */
+static bool status_uri_match(const char *reference, const char *uri, size_t length)
+{
+    web_activity_note();
+    return strlen(reference) == length && strncmp(reference, uri, length) == 0;
+}
+
+void wifinet_request_wake(void)
+{
+    if (!wifi_sleeping || !wifinet_evt_queue) return;
+    uint8_t event = WIFINET_WAKE_STA;
+    xQueueSend(wifinet_evt_queue, &event, 0);
+}
 
 
 static void sntp_set_time_sync_callback(struct timeval *tv)
@@ -135,7 +166,7 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
     switch (event->event_id) {
         case SYSTEM_EVENT_STA_START:
             ESP_LOGI(WIFINET, "STA started");
-            wifi_connect_with_log("STA_START");
+            if (!wifi_sleeping) wifi_connect_with_log("STA_START");
             break;
         case SYSTEM_EVENT_STA_CONNECTED:
             ESP_LOGI(WIFINET, "STA associated: channel=%u authmode=%d; waiting for DHCP",
@@ -143,10 +174,12 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
                      event->event_info.connected.authmode);
             break;
         case SYSTEM_EVENT_STA_GOT_IP:
+            if (wifi_sleeping) break;
             ESP_LOGI(WIFINET, "STA got IP; Wi-Fi connection ready after %u attempts and %u disconnects",
                      wifi_connect_attempts, wifi_disconnect_count);
-             
+
             net_state=1;
+            web_activity_note();
 
             // Once DHCP completes, expose the local measurement and control UI.
             status_httpd_start();
@@ -177,7 +210,7 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
 
             /* This is a workaround as ESP32 WiFi libs don't currently
                auto-reassociate. */
-            if (!wifi_reconfiguring) {
+            if (!wifi_reconfiguring && !wifi_sleeping) {
                 wifi_connect_with_log("STA_DISCONNECTED");
             }
            net_state=0;
@@ -797,6 +830,7 @@ static void status_httpd_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.max_uri_handlers = 32;
+    config.uri_match_fn = status_uri_match;
     if (httpd_start(&status_httpd, &config) != ESP_OK) {
         status_httpd = NULL;
         ESP_LOGE(WIFINET, "failed to start Wi-Fi status web server");
@@ -1052,6 +1086,7 @@ static void wifi_apply_task(void *arg)
 static void wifi_config_ap_start_internal(void)
 {
     ESP_ERROR_CHECK(wifi_stack_init_once());
+    wifi_sleeping = false;
 
     status_httpd_stop();
 
@@ -1098,6 +1133,7 @@ static void app_wifi_initialise(void)
     esp_err_t err;
     size_t Len;
     ESP_ERROR_CHECK(wifi_stack_init_once());
+    wifi_sleeping = false;
 
     wifi_config_t wifi_config;
     bzero(&wifi_config, sizeof(wifi_config_t));
@@ -1159,9 +1195,45 @@ static void app_wifi_initialise(void)
     }
 }
 
+static void wifi_collection_sleep(void)
+{
+    if (wifi_sleeping || !wifi_started || collection_network_busy() ||
+        (uint32_t)(wifi_uptime_ms() - last_web_activity_ms) < COLLECTION_WIFI_IDLE_MS) return;
+
+    wifi_sleeping = true;
+    status_httpd_stop();
+    esp_err_t err = esp_wifi_stop();
+    if (err != ESP_OK) {
+        wifi_sleeping = false;
+        status_httpd_start();
+        ESP_LOGE(WIFINET, "Unable to pause Wi-Fi: %s", esp_err_to_name(err));
+        return;
+    }
+    wifi_started = false;
+    net_state = 0;
+    ESP_LOGI(WIFINET, "Wi-Fi paused after 3 minutes without web access; collection continues");
+}
+
+static void wifi_collection_wake(const char *reason)
+{
+    if (!wifi_sleeping || wifi_config_ap_active) return;
+    web_activity_note();
+    wifi_sleeping = false;
+    esp_err_t err = esp_wifi_start();
+    if (err != ESP_OK) {
+        wifi_sleeping = true;
+        ESP_LOGE(WIFINET, "Unable to resume Wi-Fi: %s", esp_err_to_name(err));
+        return;
+    }
+    wifi_started = true;
+    ESP_LOGI(WIFINET, "Wi-Fi resuming: %s", reason);
+}
+
 void wifinet_task(void *arg)
 {
     uint8_t evt;
+    bool alert_wake_latched = false;
+    uint32_t last_alert_attempt_ms = 0;
     wifinet_evt_queue = xQueueCreate(3, sizeof(evt));
     if (wifinet_evt_queue == NULL) {
         ESP_LOGE(WIFINET, "Failed to create Wi-Fi event queue");
@@ -1178,10 +1250,38 @@ void wifinet_task(void *arg)
         app_wifi_initialise();
     }
 
+    web_activity_note();
     while (true) {
-        if (xQueueReceive(wifinet_evt_queue, &evt, portMAX_DELAY) == pdTRUE &&
-            evt == WIFINET_CONFIG_AP) {
-            wifi_config_ap_start();
+        bool button_wake = false;
+        if (xQueueReceive(wifinet_evt_queue, &evt, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            if (evt == WIFINET_CONFIG_AP) wifi_config_ap_start();
+            else if (evt == WIFINET_WAKE_STA) {
+                wifi_collection_wake("button press");
+                button_wake = true;
+            }
+        }
+
+        bool alert_pending = collection_alert_pending();
+        if (!alert_pending) alert_wake_latched = false;
+        else if (!wifi_sleeping && (!alert_wake_latched || button_wake)) {
+            alert_wake_latched = true;
+            last_alert_attempt_ms = wifi_uptime_ms();
+        }
+
+        if (wifi_sleeping) {
+            if (!collection_is_active()) wifi_collection_wake("collection ended");
+            else if (alert_pending && (!alert_wake_latched ||
+                     (uint32_t)(wifi_uptime_ms() - last_alert_attempt_ms) >= COLLECTION_ALERT_RETRY_MS)) {
+                alert_wake_latched = true;
+                last_alert_attempt_ms = wifi_uptime_ms();
+                wifi_collection_wake("Telegram notification pending");
+            }
+        } else if (collection_is_active() && wifi_started && !wifi_config_ap_active &&
+                   !wifi_reconfiguring && !collection_network_busy() &&
+                   (!alert_pending ||
+                    (uint32_t)(wifi_uptime_ms() - last_alert_attempt_ms) >= COLLECTION_ALERT_GRACE_MS) &&
+                   (uint32_t)(wifi_uptime_ms() - last_web_activity_ms) >= COLLECTION_WIFI_IDLE_MS) {
+            wifi_collection_sleep();
         }
     }
 }

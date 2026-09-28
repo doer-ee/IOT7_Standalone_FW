@@ -260,6 +260,7 @@ void KeyScan()
 
                if (collection_is_active()) {
                   key_click_pending = false;
+                  wifinet_request_wake();
                   return;
                }
 

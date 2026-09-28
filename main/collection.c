@@ -370,6 +370,19 @@ static void collection_task(void *arg)
 }
 
 bool collection_is_active(void) { return col_active; }
+bool collection_alert_pending(void)
+{
+    if (!col_lock || !telegram_token[0] || !telegram_chat[0]) return false;
+    xSemaphoreTake(col_lock, portMAX_DELAY);
+    bool pending = col_cfg.pending_full_id || col_cfg.pending_done_id;
+    xSemaphoreGive(col_lock);
+    return pending;
+}
+bool collection_network_busy(void)
+{
+    return send_state == 1 || export_active ||
+           (send_queue && uxQueueMessagesWaiting(send_queue));
+}
 uint8_t collection_active_function(void) { return col_active ? col_cfg.function : 0; }
 const char *collection_ntp_server(void) { return ntp_server; }
 void collection_time_synced(void) { time_synced = true; }
