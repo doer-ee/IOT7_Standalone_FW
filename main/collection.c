@@ -87,6 +87,9 @@ static char ntp_server[64] = "time.nist.gov";
 static char timezone_name[40] = "America/Chicago";
 static char telegram_token[96];
 static char telegram_chat[40];
+static uint8_t scan_buffer[COL_SECTOR];
+static bool storage_ready;
+static void scan_storage(void);
 
 static uint32_t crc32_bytes(const void *data, size_t length)
 {
@@ -238,6 +241,12 @@ static void collection_task(void *arg)
     (void)arg;
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(50));
+        if (!storage_ready && col_cfg.active) {
+            if (xSemaphoreTake(col_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+                scan_storage();
+                xSemaphoreGive(col_lock);
+            }
+        }
         if (!col_active || !col_part || export_active) continue;
         uint64_t now_ms = esp_timer_get_time() / 1000;
         if (now_ms < next_due_ms) continue;
@@ -313,20 +322,39 @@ void collection_init(void)
         nvs_close(nvs);
     }
     apply_timezone();
+    send_queue = xQueueCreate(4, sizeof(uint32_t));
+    xTaskCreate(collection_task, "collection", 4096, NULL, 4, NULL);
+}
+
+static void scan_storage(void)
+{
+    if (storage_ready || !col_part) return;
     uint32_t max_seq = 0, max_slot = col_slots - 1;
-    col_record_t r;
-    for (uint32_t slot = 0; slot < col_slots; ++slot) {
-        if (read_slot(slot, &r) && record_valid(&r) && r.log_sequence > max_seq) {
-            max_seq = r.log_sequence;
-            max_slot = slot;
+    const uint32_t slots_per_sector = COL_SECTOR / COL_RECORD;
+    col_record_t *records = (col_record_t *)scan_buffer;
+    const uint32_t sector_count = col_part->size / COL_SECTOR;
+    for (uint32_t sector = 0; sector < sector_count; ++sector) {
+        if (esp_partition_read(col_part, sector * COL_SECTOR, scan_buffer, COL_SECTOR) != ESP_OK) continue;
+        for (uint32_t local = 0; local < slots_per_sector; ++local) {
+            col_record_t *candidate = &records[local];
+            if (record_valid(candidate) && candidate->log_sequence > max_seq) {
+                max_seq = candidate->log_sequence;
+                max_slot = sector * slots_per_sector + local;
+            }
         }
     }
     next_log_sequence = max_seq + 1;
     if (!next_log_sequence) next_log_sequence = 1;
     write_slot = (max_slot + 1) % col_slots;
-    for (uint32_t i = 1; i <= col_slots; ++i) {
-        uint32_t slot = (max_slot + i) % col_slots;
-        if (read_slot(slot, &r) && record_valid(&r)) summary_apply(&r);
+    const uint32_t start_sector = ((max_slot + 1) % col_slots) / slots_per_sector;
+    const uint32_t start_local = (max_slot + 1) % slots_per_sector;
+    for (uint32_t sector_offset = 0; sector_offset < sector_count; ++sector_offset) {
+        uint32_t sector = (start_sector + sector_offset) % sector_count;
+        if (esp_partition_read(col_part, sector * COL_SECTOR, scan_buffer, COL_SECTOR) != ESP_OK) continue;
+        uint32_t first = sector_offset == 0 ? start_local : 0;
+        for (uint32_t local = first; local < slots_per_sector; ++local) {
+            if (record_valid(&records[local])) summary_apply(&records[local]);
+        }
     }
     if (col_cfg.active && col_cfg.function >= 1 && col_cfg.function <= 7) {
         col_summary_t *s = summary_for(col_cfg.session_id, false);
@@ -342,8 +370,7 @@ void collection_init(void)
     }
     ESP_LOGI(TAG, "Flash records scanned; sessions=%u next sequence=%" PRIu32,
              (unsigned)session_count, next_log_sequence);
-    send_queue = xQueueCreate(4, sizeof(uint32_t));
-    xTaskCreate(collection_task, "collection", 4096, NULL, 4, NULL);
+    storage_ready = true;
 }
 
 static esp_err_t api_error(httpd_req_t *req, const char *status, const char *message)
@@ -468,6 +495,7 @@ static esp_err_t collection_start_post(httpd_req_t *req)
         xSemaphoreGive(col_lock);
         return api_error(req, "409 Conflict", "Collection cannot start in this mode");
     }
+    if (!storage_ready) scan_storage();
     control_state_t state;
     if (!control_get_state(&state) || state.function_pending || state.range_pending) {
         xSemaphoreGive(col_lock);
@@ -520,6 +548,7 @@ static esp_err_t collection_sessions_get(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send_chunk(req, "{\"sessions\":[", HTTPD_RESP_USE_STRLEN);
     xSemaphoreTake(col_lock, portMAX_DELAY);
+    if (!storage_ready) scan_storage();
     char json[360];
     for (size_t i = 0; i < session_count; ++i) {
         col_summary_t *s = &sessions[session_count - 1 - i];
@@ -566,6 +595,7 @@ static esp_err_t collection_records_get(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send_chunk(req, "{\"records\":[", HTTPD_RESP_USE_STRLEN);
     xSemaphoreTake(col_lock, portMAX_DELAY);
+    if (!storage_ready) scan_storage();
     uint32_t emitted = 0, seen = 0;
     char json[270];
     col_record_t r;
@@ -595,6 +625,7 @@ static esp_err_t collection_csv_get(httpd_req_t *req)
     uint32_t id;
     if (!query_number(req, "id", &id)) return api_error(req, "400 Bad Request", "Missing session ID");
     xSemaphoreTake(col_lock, portMAX_DELAY);
+    if (!storage_ready) scan_storage();
     col_summary_t *s = summary_for(id, false);
     if (!s || export_active) {
         xSemaphoreGive(col_lock);
