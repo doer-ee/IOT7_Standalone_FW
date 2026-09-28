@@ -4,6 +4,7 @@
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_private/system_internal.h"
 #include "esp_system.h"
 #include "mdns.h"
 #include <stdbool.h>
@@ -1424,8 +1425,15 @@ void wifinet_task(void *arg)
         if (ota_reboot_requested) {
             ota_reboot_requested = false;
             ESP_LOGI(WIFINET, "OTA response sent; restarting into the new firmware");
+            status_httpd_stop();
+            if (wifi_started) {
+                esp_wifi_stop();
+                wifi_started = false;
+                net_state = 0;
+            }
             vTaskDelay(pdMS_TO_TICKS(1500));
-            esp_restart();
+            ESP_LOGI(WIFINET, "OTA restart: resetting digital peripherals");
+            esp_restart_noos_dig();
         }
         bool button_wake = false;
         if (xQueueReceive(wifinet_evt_queue, &evt, pdMS_TO_TICKS(1000)) == pdTRUE) {
