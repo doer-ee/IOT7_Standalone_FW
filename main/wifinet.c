@@ -994,6 +994,7 @@ static void status_httpd_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.max_uri_handlers = 32;
+    config.stack_size = 8192;
     config.uri_match_fn = status_uri_match;
     if (httpd_start(&status_httpd, &config) != ESP_OK) {
         status_httpd = NULL;
