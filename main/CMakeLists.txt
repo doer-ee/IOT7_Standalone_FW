@@ -5,7 +5,7 @@ idf_component_register(SRCS
 "wifinet.c"
 "switch_fun.c"
 "collection.c"
-EMBED_TXTFILES "meter.html"
+EMBED_FILES "meter.html.gz"
 INCLUDE_DIRS ""
 REQUIRES
     app_update

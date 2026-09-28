@@ -331,9 +331,9 @@ static bool form_get_value(const char *body, const char *key, char *out, size_t 
  * Measurement values remain in the firmware's raw unit representation until
  * the unit scaling has been checked against a low-voltage reference.
  */
-/* The standalone dashboard is embedded as a text resource by the component build. */
-extern const uint8_t _binary_meter_html_start[] asm("_binary_meter_html_start");
-extern const uint8_t _binary_meter_html_end[] asm("_binary_meter_html_end");
+/* The standalone dashboard is embedded as a pre-compressed binary resource. */
+extern const uint8_t _binary_meter_html_gz_start[] asm("_binary_meter_html_gz_start");
+extern const uint8_t _binary_meter_html_gz_end[] asm("_binary_meter_html_gz_end");
 
 static size_t json_escape(const char *src, char *dst, size_t dst_size)
 {
@@ -965,8 +965,9 @@ static esp_err_t status_page_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    size_t page_length = (size_t)(_binary_meter_html_end - _binary_meter_html_start);
-    return httpd_resp_send(req, (const char *)_binary_meter_html_start, page_length);
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    size_t page_length = (size_t)(_binary_meter_html_gz_end - _binary_meter_html_gz_start);
+    return httpd_resp_send(req, (const char *)_binary_meter_html_gz_start, page_length);
 }
 
 static void status_httpd_stop(void)
