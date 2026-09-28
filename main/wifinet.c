@@ -4,7 +4,6 @@
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
-#include "esp_private/system_internal.h"
 #include "esp_system.h"
 #include "mdns.h"
 #include <stdbool.h>
@@ -1432,8 +1431,8 @@ void wifinet_task(void *arg)
                 net_state = 0;
             }
             vTaskDelay(pdMS_TO_TICKS(1500));
-            ESP_LOGI(WIFINET, "OTA restart: resetting digital peripherals");
-            esp_restart_noos_dig();
+            ESP_LOGI(WIFINET, "OTA restart: using standard system reset");
+            esp_restart();
         }
         bool button_wake = false;
         if (xQueueReceive(wifinet_evt_queue, &evt, pdMS_TO_TICKS(1000)) == pdTRUE) {
