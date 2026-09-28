@@ -139,6 +139,13 @@
     .session-actions button { min-height:28px; padding:4px 8px; border:1px solid #536171; border-radius:7px; background:#243541; color:#d9e4eb; font-size:10px; font-weight:750; }
     .session-actions button:disabled { cursor:not-allowed; }
     .session-name { width:100%; min-height:29px; padding:5px 7px; border:1px solid #405260; border-radius:7px; background:#0f1b24; color:#eef5f8; font-size:12px; font-weight:750; }
+    .session-settings { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; margin-top:10px; padding-top:9px; border-top:1px solid #30404d; }
+    .session-settings label { color:#91a5b3; font-size:10px; font-weight:750; }
+    .session-settings select,.session-settings input { display:block; width:100%; min-height:29px; margin-top:4px; padding:4px 6px; border:1px solid #405260; border-radius:7px; background:#0f1b24; color:#eef5f8; font-size:10px; }
+    .session-settings .session-target { grid-column:2; }
+    .session-settings .session-custom { grid-column:1; }
+    .session-settings .session-save { grid-column:1 / -1; }
+    .session-settings .session-note { grid-column:1 / -1; margin:0; color:#788d9d; font-size:10px; }
     .settings-layout { display:grid; grid-template-columns:minmax(170px,220px) minmax(0,1fr); gap:16px; flex:1 1 auto; min-height:0; margin-top:18px; overflow:hidden; }
     .settings-nav { min-height:0; overflow:auto; padding:10px; border:1px solid #30404d; border-radius:15px; background:#17232e; }
     .settings-tab { display:flex; align-items:center; width:100%; min-height:42px; margin:0 0 6px; padding:9px 11px; border:1px solid transparent; border-radius:9px; background:transparent; color:#9eb0bd; text-align:left; font-size:12px; font-weight:800; transition:background .15s,border-color .15s,color .15s,transform .15s; }
@@ -390,6 +397,30 @@
     function updateCollectionButton() { const allowed=[1,2,3,4,5,6,7].includes(activeFunction); el('collect_button').classList.toggle('hidden',!allowed); setText('collection_function',functionNameFor(activeFunction)); }
     function functionNameFor(id) { return [1,2].includes(id) ? 'Voltage' : [3,4,5,6].includes(id) ? 'Current' : id===7 ? 'Resistance' : 'Unavailable'; }
     function collectionMessage(message,error) { setText('collection_message',message); el('collection_message').classList.toggle('error',!!error); }
+    const collectionIntervals=[['500','0.5 s'],['1000','1 s'],['2000','2 s'],['5000','5 s'],['10000','10 s'],['60000','1 min'],['300000','5 min'],['600000','10 min'],['3600000','1 h']];
+    function intervalLabel(ms) { const known=collectionIntervals.find(([value])=>Number(value)===Number(ms)); return known ? known[1] : (Number(ms)/1000).toFixed(Number(ms)%1000 ? 3 : 0)+' s'; }
+    function lengthLabel(kind,target) { return Number(kind)===0 ? 'Infinite' : Number(kind)===1 ? Number(target)+' samples' : Number(target)+' min'; }
+    function collectionIntervalOptions(value) { return collectionIntervals.map(([ms,label])=>'<option value="'+ms+'"'+(Number(ms)===Number(value)?' selected':'')+'>'+label+'</option>').join('')+'<option value="custom"'+(collectionIntervals.some(([ms])=>Number(ms)===Number(value))?'':' selected')+'>Other</option>'; }
+    function collectionLengthOptions(kind) { return '<option value="0"'+(Number(kind)===0?' selected':'')+'>Infinite</option><option value="1"'+(Number(kind)===1?' selected':'')+'>Samples</option><option value="2"'+(Number(kind)===2?' selected':'')+'>Minutes</option>'; }
+    function buildCollectionEditor(s) {
+      const wrap=document.createElement('div'); wrap.className='session-settings';
+      const interval=document.createElement('select'); interval.innerHTML=collectionIntervalOptions(s.interval_ms); interval.dataset.value=s.interval_ms;
+      const intervalLabelEl=document.createElement('label'); intervalLabelEl.textContent='Interval'; intervalLabelEl.append(interval);
+      const custom=document.createElement('input'); custom.className='session-custom'; custom.type='number'; custom.min='500'; custom.max='3600000'; custom.step='1'; custom.value=s.interval_ms||1000; custom.hidden=interval.value!=='custom';
+      const customLabel=document.createElement('label'); customLabel.className='session-custom'; customLabel.textContent='Custom ms'; customLabel.append(custom); customLabel.hidden=interval.value!=='custom';
+      interval.addEventListener('change',()=>{ const customSelected=interval.value==='custom'; custom.hidden=!customSelected; customLabel.hidden=!customSelected; });
+      const length=document.createElement('select'); length.innerHTML=collectionLengthOptions(s.settings_known?s.limit_kind:0);
+      const lengthLabelEl=document.createElement('label'); lengthLabelEl.textContent='Length'; lengthLabelEl.append(length);
+      const target=document.createElement('input'); target.type='number'; target.min='1'; target.max='100000000'; target.value=s.settings_known&&s.target?s.target:60; target.hidden=length.value==='0';
+      const targetLabel=document.createElement('label'); targetLabel.className='session-target'; targetLabel.textContent='Target'; targetLabel.append(target); targetLabel.hidden=length.value==='0';
+      length.addEventListener('change',()=>{ target.hidden=length.value==='0'; targetLabel.hidden=length.value==='0'; });
+      const save=document.createElement('button'); save.className='session-save'; save.type='button'; save.textContent='Save interval and length';
+      save.disabled=!!s.collecting;
+      save.onclick=async()=>{ const intervalMs=interval.value==='custom'?Number(custom.value):Number(interval.value); const kind=Number(length.value), targetValue=kind?Number(target.value):0; if(intervalMs<500||intervalMs>3600000||!Number.isFinite(intervalMs)||kind&&(!targetValue||targetValue>100000000)){collectionMessage('Enter valid interval and length.',true);return;} save.disabled=true; try{await post('/api/collection/update','id='+s.id+'&interval_ms='+intervalMs+'&limit_kind='+kind+'&target='+targetValue);collectionMessage('Collection settings saved.');refreshCollection();}catch(e){save.disabled=false;collectionMessage(e.message,true)} };
+      wrap.append(intervalLabelEl,lengthLabelEl,customLabel,targetLabel,save);
+      if (!s.settings_known) { const note=document.createElement('p'); note.className='session-note'; note.textContent='Length was not stored for this older collection. Save a length before continuing.'; wrap.append(note); }
+      return wrap;
+    }
     el('collection_interval').addEventListener('change',()=>el('custom_interval_wrap').classList.toggle('hidden',el('collection_interval').value!=='custom'));
     el('collection_limit').addEventListener('change',()=>el('collection_target_wrap').classList.toggle('hidden',el('collection_limit').value==='0'));
     async function refreshCollection() {
@@ -398,7 +429,22 @@
         setText('collection_clock',settings.time_synced?'Clock synchronized':'Clock not synchronized'); el('collection_clock').className='settings-message '+(settings.time_synced?'':'error');
         setText('collection_capacity',status.used_percent+'% full · '+status.capacity_records+' records'); el('start_collection').disabled=!!status.active; el('stop_collection').disabled=!status.active;
         const holder=el('session_list'); holder.replaceChildren(); if (!list.sessions.length) { holder.innerHTML='<p class="settings-message">No collections yet.</p>'; return; }
-        list.sessions.forEach(s=>{ const row=document.createElement('div'); row.className='session'; const name=document.createElement('input'); name.className='session-name'; name.value=s.name||('Collection #'+s.id); name.maxLength=31; const save=document.createElement('button'); save.textContent='Save name'; save.onclick=async()=>{try{await post('/api/collection/rename','id='+s.id+'&name='+encodeURIComponent(name.value.trim()));collectionMessage('Collection name saved.')}catch(e){collectionMessage(e.message,true)}}; const titleLine=document.createElement('div'); titleLine.className='session-actions'; titleLine.append(name,save); const meta=document.createElement('small'); const start=s.start_utc_s?new Date(s.start_utc_s*1000).toLocaleString():'Time unavailable'; meta.textContent=start+' · '+s.function+' · '+s.count+' samples · '+s.interval_ms+' ms'+(s.collecting?' · Collecting':''); const actions=document.createElement('div'); actions.className='session-actions'; const csv=document.createElement('button'); csv.textContent='Download CSV'; csv.onclick=()=>window.location='/api/collection/csv?id='+s.id; const send=document.createElement('button'); send.textContent='Send to Telegram'; send.disabled=!settings.telegram_configured; send.title=settings.telegram_configured?'Send CSV':'Configure Telegram in Settings'; send.onclick=async()=>{try{await post('/api/collection/send','id='+s.id);collectionMessage('CSV send queued.')}catch(e){collectionMessage(e.message,true)}}; actions.append(csv,send); row.append(titleLine,meta,actions); holder.appendChild(row); });
+        list.sessions.forEach(s=>{
+          const row=document.createElement('div'); row.className='session';
+          const name=document.createElement('input'); name.className='session-name'; name.value=s.name||('Collection #'+s.id); name.maxLength=31;
+          const saveName=document.createElement('button'); saveName.textContent='Save name'; saveName.onclick=async()=>{try{await post('/api/collection/rename','id='+s.id+'&name='+encodeURIComponent(name.value.trim()));collectionMessage('Collection name saved.')}catch(e){collectionMessage(e.message,true)}};
+          const titleLine=document.createElement('div'); titleLine.className='session-actions'; titleLine.append(name,saveName);
+          const meta=document.createElement('small'); const start=s.start_utc_s?new Date(s.start_utc_s*1000).toLocaleString():'Time unavailable';
+          meta.textContent=start+' · '+s.function+' · '+s.count+' samples'+(s.collecting?' · Collecting':'');
+          const settingsSummary=document.createElement('small'); settingsSummary.textContent='Interval: '+intervalLabel(s.interval_ms)+' · Length: '+(s.settings_known?lengthLabel(s.limit_kind,s.target):'Not recorded');
+          row.append(titleLine,meta,settingsSummary,buildCollectionEditor(s));
+          const actions=document.createElement('div'); actions.className='session-actions';
+          const csv=document.createElement('button'); csv.textContent='Download CSV'; csv.onclick=()=>window.location='/api/collection/csv?id='+s.id;
+          const send=document.createElement('button'); send.textContent='Send to Telegram'; send.disabled=!settings.telegram_configured; send.title=settings.telegram_configured?'Send CSV':'Configure Telegram in Settings'; send.onclick=async()=>{try{await post('/api/collection/send','id='+s.id);collectionMessage('CSV send queued.')}catch(e){collectionMessage(e.message,true)}};
+          const resume=document.createElement('button'); resume.textContent='Continue'; resume.disabled=!!status.active||!!s.collecting||s.function_id!==activeFunction; resume.title=s.collecting?'This collection is already running':s.function_id!==activeFunction?'Select '+s.function+' mode first':'Continue this collection'; resume.onclick=async()=>{if(!confirm('Continue this collection with its saved interval and length?'))return;resume.disabled=true;try{await post('/api/collection/resume','id='+s.id);collectionMessage('Collection continued. Mode switching is locked.');refreshCollection();}catch(e){resume.disabled=false;collectionMessage(e.message,true)}};
+          const remove=document.createElement('button'); remove.textContent='Delete'; remove.disabled=!!s.collecting; remove.onclick=async()=>{if(!confirm('Delete this collection and its saved records?'))return;remove.disabled=true;try{await post('/api/collection/delete','id='+s.id);collectionMessage('Collection deleted.');refreshCollection();}catch(e){remove.disabled=false;collectionMessage(e.message,true)}};
+          actions.append(csv,send,resume,remove); row.appendChild(actions); holder.appendChild(row);
+        });
       } catch (e) { collectionMessage('Collection service unavailable: '+e.message,true); }
     }
     el('start_collection').addEventListener('click',async()=>{ let interval=el('collection_interval').value==='custom'?Number(el('custom_interval').value):Number(el('collection_interval').value); const kind=Number(el('collection_limit').value), target=kind?Number(el('collection_target').value):0; if(interval<500||!Number.isFinite(interval)||kind&&(!target||target<1)){collectionMessage('Enter valid collection settings.',true);return;} try{await post('/api/collection/start','interval_ms='+interval+'&limit_kind='+kind+'&target='+target); collectionMessage('Collection started. Mode switching is locked.'); refreshCollection();}catch(e){collectionMessage(e.message,true)} });

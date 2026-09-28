@@ -16,6 +16,9 @@
 #define COL_SAMPLE 0U
 #define COL_START 1U
 #define COL_STOP 2U
+#define COL_DELETE 3U
+#define COL_CONFIG_FLAG 0x20U
+#define COL_RESUME_FLAG 0x40U
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;
@@ -59,8 +62,11 @@ typedef struct {
     uint32_t last_utc_s;
     uint32_t elapsed_ds;
     uint32_t interval_ms;
+    uint32_t target;
     uint8_t function;
     uint8_t unit;
+    uint8_t limit_kind;
+    bool settings_known;
     bool stopped;
     uint32_t start_utc_s;
     char name[32];
@@ -75,6 +81,7 @@ static size_t session_count;
 static uint32_t col_slots;
 static uint32_t write_slot;
 static uint32_t next_log_sequence = 1;
+static uint32_t highest_session_id;
 static uint32_t last_snapshot_sequence;
 static uint64_t started_ms;
 static uint64_t next_due_ms;
@@ -260,8 +267,23 @@ static col_summary_t *summary_for(uint32_t id, bool create)
     return s;
 }
 
+static void summary_remove(uint32_t id)
+{
+    for (size_t i = 0; i < session_count; ++i) {
+        if (sessions[i].id != id) continue;
+        memmove(&sessions[i], &sessions[i + 1], (session_count - i - 1) * sizeof(sessions[0]));
+        session_count--;
+        return;
+    }
+}
+
 static void summary_apply(const col_record_t *r)
 {
+    if (r->session_id > highest_session_id) highest_session_id = r->session_id;
+    if ((r->kind_flags & 3U) == COL_DELETE) {
+        summary_remove(r->session_id);
+        return;
+    }
     col_summary_t *s = summary_for(r->session_id, true);
     if (!s) return;
     switch (r->kind_flags & 3U) {
@@ -269,7 +291,13 @@ static void summary_apply(const col_record_t *r)
             s->interval_ms = r->value_raw;
             s->function = r->function;
             s->unit = r->unit & 0x0f;
-            s->start_utc_s = r->utc_s;
+            if (r->kind_flags & COL_CONFIG_FLAG) {
+                s->limit_kind = r->range;
+                s->target = r->elapsed_ds;
+                s->settings_known = true;
+            }
+            if (!s->start_utc_s) s->start_utc_s = r->utc_s;
+            if (r->kind_flags & COL_RESUME_FLAG) s->stopped = false;
             break;
         case COL_STOP:
             s->stopped = true;
@@ -485,10 +513,17 @@ static void scan_storage(void)
             if (record_valid(&records[local])) summary_apply(&records[local]);
         }
     }
+    if (col_cfg.session_id > highest_session_id) highest_session_id = col_cfg.session_id;
     if (col_cfg.active && col_cfg.function >= 1 && col_cfg.function <= 7) {
         col_summary_t *s = summary_for(col_cfg.session_id, false);
         if (s && s->stopped) { col_cfg.active = 0; cfg_save(); }
         else {
+            if (s && !s->settings_known) {
+                s->interval_ms = col_cfg.interval_ms;
+                s->limit_kind = col_cfg.limit_kind;
+                s->target = col_cfg.target;
+                s->settings_known = true;
+            }
             col_cfg.elapsed_ds = s ? s->elapsed_ds : col_cfg.elapsed_ds;
             current_fun = col_cfg.function;
             col_active = true;
@@ -496,6 +531,13 @@ static void scan_storage(void)
             next_due_ms = started_ms + col_cfg.interval_ms;
             ESP_LOGI(TAG, "Resumed collection %" PRIu32 " after power loss", col_cfg.session_id);
         }
+    }
+    col_summary_t *latest = summary_for(col_cfg.session_id, false);
+    if (latest && !latest->settings_known) {
+        latest->interval_ms = col_cfg.interval_ms;
+        latest->limit_kind = col_cfg.limit_kind;
+        latest->target = col_cfg.target;
+        latest->settings_known = true;
     }
     ESP_LOGI(TAG, "Flash records scanned; sessions=%u next sequence=%" PRIu32,
              (unsigned)session_count, next_log_sequence);
@@ -608,14 +650,42 @@ static esp_err_t collection_status_get(httpd_req_t *req)
     return httpd_resp_sendstr(req, json);
 }
 
+static bool valid_collection_settings(uint32_t interval, uint32_t kind, uint32_t target)
+{
+    if (interval < 500 || interval > 3600000 || kind > 2) return false;
+    if (kind == 0) return target == 0;
+    if (!target || target > 100000000) return false;
+    return kind != 2 || target <= UINT32_MAX / 600U;
+}
+
+static bool parse_collection_settings(const char *body, uint32_t *interval, uint32_t *kind, uint32_t *target)
+{
+    if (!form_number(body, "interval_ms", interval) ||
+        !form_number(body, "limit_kind", kind) ||
+        !form_number(body, "target", target)) return false;
+    return valid_collection_settings(*interval, *kind, *target);
+}
+
+static esp_err_t write_settings_record(uint32_t id, uint8_t function, uint32_t interval,
+                                       uint32_t kind, uint32_t target, bool resume)
+{
+    col_record_t record = {
+        .session_id = id,
+        .value_raw = interval,
+        .elapsed_ds = target,
+        .kind_flags = COL_START | COL_CONFIG_FLAG | (resume ? COL_RESUME_FLAG : 0),
+        .function = function,
+        .range = (uint8_t)kind,
+    };
+    return write_record(&record);
+}
+
 static esp_err_t collection_start_post(httpd_req_t *req)
 {
     char body[256];
     uint32_t interval, kind, target = 0;
     if (!read_form(req, body, sizeof(body)) ||
-        !form_number(body, "interval_ms", &interval) || interval < 500 || interval > 3600000 ||
-        !form_number(body, "limit_kind", &kind) || kind > 2 ||
-        (kind && (!form_number(body, "target", &target) || !target || target > 100000000)))
+        !parse_collection_settings(body, &interval, &kind, &target))
         return api_error(req, "400 Bad Request", "Invalid collection settings");
     if (xSemaphoreTake(col_lock, pdMS_TO_TICKS(1000)) != pdTRUE)
         return api_error(req, "503 Service Unavailable", "Collection is busy");
@@ -629,9 +699,11 @@ static esp_err_t collection_start_post(httpd_req_t *req)
         xSemaphoreGive(col_lock);
         return api_error(req, "409 Conflict", "Wait for mode or range change");
     }
-    uint32_t next_id = col_cfg.session_id + 1;
-    for (size_t i = 0; i < session_count; ++i)
-        if (sessions[i].id >= next_id) next_id = sessions[i].id + 1;
+    uint32_t next_id = highest_session_id + 1;
+    if (!next_id) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "507 Insufficient Storage", "Collection ID space is exhausted");
+    }
     uint32_t pending_done = col_cfg.pending_done_id, pending_full = col_cfg.pending_full_id;
     col_cfg = (col_config_t){ .session_id = next_id, .interval_ms = interval, .target = target,
         .limit_kind = (uint8_t)kind, .function = current_fun, .display_unit = 0, .active = 1 };
@@ -640,8 +712,9 @@ static esp_err_t collection_start_post(httpd_req_t *req)
     esp_err_t err = cfg_save();
     if (err == ESP_OK) {
         col_record_t start = { .session_id = next_id, .utc_s = now_utc_s(),
-            .value_raw = interval, .kind_flags = COL_START, .function = current_fun,
-            .unit = now_tenth() << 4 };
+            .value_raw = interval, .elapsed_ds = target,
+            .kind_flags = COL_START | COL_CONFIG_FLAG, .function = current_fun,
+            .unit = now_tenth() << 4, .range = (uint8_t)kind };
         err = write_record(&start);
     }
     if (err == ESP_OK) {
@@ -655,6 +728,120 @@ static esp_err_t collection_start_post(httpd_req_t *req)
     }
     xSemaphoreGive(col_lock);
     if (err != ESP_OK) return api_error(req, "500 Internal Server Error", "Unable to start collection");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"accepted\":true}");
+}
+
+static esp_err_t collection_update_post(httpd_req_t *req)
+{
+    char body[256];
+    uint32_t id, interval, kind, target;
+    if (!read_form(req, body, sizeof(body)) || !form_number(body, "id", &id) ||
+        !parse_collection_settings(body, &interval, &kind, &target))
+        return api_error(req, "400 Bad Request", "Invalid collection settings");
+    if (xSemaphoreTake(col_lock, pdMS_TO_TICKS(1000)) != pdTRUE)
+        return api_error(req, "503 Service Unavailable", "Collection is busy");
+    if (!storage_ready) scan_storage();
+    col_summary_t *s = summary_for(id, false);
+    if (!s) { xSemaphoreGive(col_lock); return api_error(req, "404 Not Found", "Collection not found"); }
+    if (col_active || export_active || collection_network_busy()) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "409 Conflict", "Stop collection or export before editing");
+    }
+    esp_err_t err = write_settings_record(id, s->function, interval, kind, target, false);
+    xSemaphoreGive(col_lock);
+    if (err != ESP_OK) return api_error(req, "500 Internal Server Error", "Unable to save collection settings");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"accepted\":true}");
+}
+
+static esp_err_t collection_resume_post(httpd_req_t *req)
+{
+    char body[64];
+    uint32_t id;
+    if (!read_form(req, body, sizeof(body)) || !form_number(body, "id", &id))
+        return api_error(req, "400 Bad Request", "Invalid collection ID");
+    if (xSemaphoreTake(col_lock, pdMS_TO_TICKS(1000)) != pdTRUE)
+        return api_error(req, "503 Service Unavailable", "Collection is busy");
+    if (!storage_ready) scan_storage();
+    col_summary_t *s = summary_for(id, false);
+    if (!s) { xSemaphoreGive(col_lock); return api_error(req, "404 Not Found", "Collection not found"); }
+    if (col_active || export_active || collection_network_busy()) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "409 Conflict", "Another collection or export is active");
+    }
+    if (!s->settings_known || !valid_collection_settings(s->interval_ms, s->limit_kind, s->target)) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "409 Conflict", "Save interval and length before continuing");
+    }
+    if (current_fun != s->function) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "409 Conflict", "Select the collection's measurement mode first");
+    }
+    control_state_t state;
+    if (!control_get_state(&state) || state.function_pending || state.range_pending) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "409 Conflict", "Wait for mode or range change");
+    }
+    if ((s->limit_kind == 1 && s->count >= s->target) ||
+        (s->limit_kind == 2 && s->elapsed_ds >= s->target * 600U)) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "409 Conflict", "Increase the collection length before continuing");
+    }
+    uint32_t pending_done = col_cfg.pending_done_id, pending_full = col_cfg.pending_full_id;
+    col_cfg = (col_config_t){ .session_id = id, .interval_ms = s->interval_ms,
+        .target = s->target, .elapsed_ds = s->elapsed_ds, .limit_kind = s->limit_kind,
+        .function = s->function, .active = 1, .pending_done_id = pending_done,
+        .pending_full_id = pending_full };
+    esp_err_t err = cfg_save();
+    if (err == ESP_OK) err = write_settings_record(id, s->function, s->interval_ms,
+                                                    s->limit_kind, s->target, true);
+    if (err == ESP_OK) {
+        col_active = true;
+        last_snapshot_sequence = 0;
+        started_ms = esp_timer_get_time() / 1000;
+        next_due_ms = started_ms;
+    } else {
+        col_cfg.active = 0;
+        cfg_save();
+    }
+    xSemaphoreGive(col_lock);
+    if (err != ESP_OK) return api_error(req, "500 Internal Server Error", "Unable to continue collection");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"accepted\":true}");
+}
+
+static esp_err_t collection_delete_post(httpd_req_t *req)
+{
+    char body[64], key[16];
+    uint32_t id;
+    if (!read_form(req, body, sizeof(body)) || !form_number(body, "id", &id))
+        return api_error(req, "400 Bad Request", "Invalid collection ID");
+    if (xSemaphoreTake(col_lock, pdMS_TO_TICKS(1000)) != pdTRUE)
+        return api_error(req, "503 Service Unavailable", "Collection is busy");
+    if (!storage_ready) scan_storage();
+    col_summary_t *s = summary_for(id, false);
+    if (!s) { xSemaphoreGive(col_lock); return api_error(req, "404 Not Found", "Collection not found"); }
+    if (col_active || export_active || collection_network_busy()) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "409 Conflict", "Stop collection or export before deleting");
+    }
+    col_record_t tombstone = { .session_id = id, .kind_flags = COL_DELETE };
+    esp_err_t err = write_record(&tombstone);
+    if (err == ESP_OK) {
+        if (col_cfg.pending_done_id == id) col_cfg.pending_done_id = 0;
+        if (col_cfg.pending_full_id == id) col_cfg.pending_full_id = 0;
+        cfg_save();
+    }
+    xSemaphoreGive(col_lock);
+    if (err != ESP_OK) return api_error(req, "500 Internal Server Error", "Unable to delete collection");
+    nvs_handle_t nvs = 0;
+    session_name_key(id, key, sizeof(key));
+    if (nvs_open("collection", NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_erase_key(nvs, key);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"accepted\":true}");
 }
@@ -698,7 +885,7 @@ static esp_err_t collection_sessions_get(httpd_req_t *req)
     httpd_resp_send_chunk(req, "{\"sessions\":[", HTTPD_RESP_USE_STRLEN);
     xSemaphoreTake(col_lock, portMAX_DELAY);
     if (!storage_ready) scan_storage();
-    char json[480], escaped_name[70];
+    char json[560], escaped_name[70];
     for (size_t i = 0; i < session_count; ++i) {
         col_summary_t *s = &sessions[session_count - 1 - i];
         json_escape_local(s->name, escaped_name, sizeof(escaped_name));
@@ -706,9 +893,11 @@ static esp_err_t collection_sessions_get(httpd_req_t *req)
             "%s{\"id\":%" PRIu32 ",\"name\":\"%s\",\"count\":%" PRIu32 ",\"start_utc_s\":%" PRIu32 ",\"first_sequence\":%" PRIu32
             ",\"last_sequence\":%" PRIu32 ",\"first_utc_s\":%" PRIu32
             ",\"last_utc_s\":%" PRIu32 ",\"elapsed_ds\":%" PRIu32
-            ",\"interval_ms\":%" PRIu32 ",\"function\":\"%s\",\"function_id\":%u,\"collecting\":%s}",
+            ",\"interval_ms\":%" PRIu32 ",\"limit_kind\":%u,\"target\":%" PRIu32
+            ",\"settings_known\":%s,\"function\":\"%s\",\"function_id\":%u,\"collecting\":%s}",
             i ? "," : "", s->id, escaped_name, s->count, s->start_utc_s, s->first_seq, s->last_seq,
             s->first_utc_s, s->last_utc_s, s->elapsed_ds, s->interval_ms,
+            s->limit_kind, s->target, s->settings_known ? "true" : "false",
             function_name(s->function), s->function, col_active && s->id == col_cfg.session_id ? "true" : "false");
         if (httpd_resp_send_chunk(req, json, HTTPD_RESP_USE_STRLEN) != ESP_OK) break;
     }
@@ -742,10 +931,14 @@ static esp_err_t collection_records_get(httpd_req_t *req)
         (query_number(req, "offset", &offset) && offset > col_slots) ||
         (query_number(req, "limit", &limit) && (limit == 0 || limit > 100)))
         return api_error(req, "400 Bad Request", "Invalid records query");
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send_chunk(req, "{\"records\":[", HTTPD_RESP_USE_STRLEN);
     xSemaphoreTake(col_lock, portMAX_DELAY);
     if (!storage_ready) scan_storage();
+    if (!summary_for(id, false)) {
+        xSemaphoreGive(col_lock);
+        return api_error(req, "404 Not Found", "Collection not found");
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send_chunk(req, "{\"records\":[", HTTPD_RESP_USE_STRLEN);
     uint32_t emitted = 0, seen = 0;
     char json[270];
     col_record_t r;
@@ -1060,6 +1253,9 @@ esp_err_t collection_register_handlers(httpd_handle_t server)
         {.uri="/api/collection/start", .method=HTTP_POST, .handler=collection_start_post},
         {.uri="/api/collection/stop", .method=HTTP_POST, .handler=collection_stop_post},
         {.uri="/api/collection/rename", .method=HTTP_POST, .handler=collection_rename_post},
+        {.uri="/api/collection/update", .method=HTTP_POST, .handler=collection_update_post},
+        {.uri="/api/collection/resume", .method=HTTP_POST, .handler=collection_resume_post},
+        {.uri="/api/collection/delete", .method=HTTP_POST, .handler=collection_delete_post},
         {.uri="/api/collection/sessions", .method=HTTP_GET, .handler=collection_sessions_get},
         {.uri="/api/collection/records", .method=HTTP_GET, .handler=collection_records_get},
         {.uri="/api/collection/csv", .method=HTTP_GET, .handler=collection_csv_get},
