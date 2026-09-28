@@ -62,6 +62,8 @@ typedef struct {
     uint8_t function;
     uint8_t unit;
     bool stopped;
+    uint32_t start_utc_s;
+    char name[32];
 } col_summary_t;
 
 static const char *TAG = "COLLECTION";
@@ -90,6 +92,88 @@ static char telegram_chat[40];
 static uint8_t scan_buffer[COL_SECTOR];
 static bool storage_ready;
 static void scan_storage(void);
+
+static const char *function_name(uint8_t function)
+{
+    switch (function) {
+        case 1: case 2: return "Voltage";
+        case 3: case 4: case 5: case 6: return "Current";
+        case 7: return "Resistance";
+        default: return "Unknown";
+    }
+}
+
+static const char *range_name(uint8_t range)
+{
+    switch (range) {
+        case ASW_DCV1: return "1000 V";
+        case ASW_DCV2: return "100 V";
+        case ASW_DCV3: return "10 V";
+        case ASW_ACV1: return "1000 V AC";
+        case ASW_ACV2: return "100 V AC";
+        case ASW_ACV3: return "10 V AC";
+        case ASW_DCMA: return "250 mA";
+        case ASW_DCA: return "2.5 A";
+        case ASW_ACMA: return "250 mA AC";
+        case ASW_ACA: return "2.5 A AC";
+        case ASW_R2: return "1 MOhm";
+        case ASW_R3: return "100 kOhm";
+        case ASW_R4: return "10 kOhm";
+        case ASW_R5: return "1 kOhm";
+        default: return "Auto";
+    }
+}
+
+static const char *standard_unit(uint8_t function)
+{
+    if (function == 1 || function == 2) return "V";
+    if (function >= 3 && function <= 6) return "A";
+    if (function == 7) return "Ohm";
+    return "";
+}
+
+static double standard_value(const col_record_t *record)
+{
+    uint8_t unit = record->unit & 0x0f;
+    double value = (double)record->value_raw;
+    if (unit == 0x01) value *= 1e-6;
+    else if (unit == 0x02) value *= 1e-3;
+    else if (unit == 0x05) value *= 1e-6;
+    else if (unit == 0x09) value *= 1e-3;
+    if (record->kind_flags & 4U) value = -value;
+    return value;
+}
+
+static void json_escape_local(const char *src, char *dst, size_t cap)
+{
+    size_t used = 0;
+    while (*src && used + 1 < cap) {
+        char c = *src++;
+        if ((c == '"' || c == '\\') && used + 2 < cap) dst[used++] = '\\';
+        if ((unsigned char)c < 0x20) c = ' ';
+        dst[used++] = c;
+    }
+    dst[used] = 0;
+}
+
+static void session_name_key(uint32_t id, char *key, size_t cap)
+{
+    snprintf(key, cap, "name_%08" PRIx32, id);
+}
+
+static void load_session_name(col_summary_t *summary)
+{
+    if (!summary || summary->name[0]) return;
+    snprintf(summary->name, sizeof(summary->name), "Collection #%" PRIu32, summary->id);
+    nvs_handle_t nvs;
+    char key[16], value[32];
+    session_name_key(summary->id, key, sizeof(key));
+    if (nvs_open("collection", NVS_READONLY, &nvs) == ESP_OK) {
+        size_t size = sizeof(value);
+        if (nvs_get_str(nvs, key, value, &size) == ESP_OK && value[0]) strlcpy(summary->name, value, sizeof(summary->name));
+        nvs_close(nvs);
+    }
+}
 
 static uint32_t crc32_bytes(const void *data, size_t length)
 {
@@ -149,6 +233,7 @@ static col_summary_t *summary_for(uint32_t id, bool create)
     col_summary_t *s = &sessions[session_count++];
     memset(s, 0, sizeof(*s));
     s->id = id;
+    load_session_name(s);
     return s;
 }
 
@@ -161,6 +246,7 @@ static void summary_apply(const col_record_t *r)
             s->interval_ms = r->value_raw;
             s->function = r->function;
             s->unit = r->unit & 0x0f;
+            s->start_utc_s = r->utc_s;
             break;
         case COL_STOP:
             s->stopped = true;
@@ -482,12 +568,11 @@ static esp_err_t collection_status_get(httpd_req_t *req)
 static esp_err_t collection_start_post(httpd_req_t *req)
 {
     char body[256];
-    uint32_t interval, kind, target = 0, unit = 0;
+    uint32_t interval, kind, target = 0;
     if (!read_form(req, body, sizeof(body)) ||
         !form_number(body, "interval_ms", &interval) || interval < 500 || interval > 3600000 ||
         !form_number(body, "limit_kind", &kind) || kind > 2 ||
-        (kind && (!form_number(body, "target", &target) || !target || target > 100000000)) ||
-        !form_number(body, "unit", &unit) || unit > 12)
+        (kind && (!form_number(body, "target", &target) || !target || target > 100000000)))
         return api_error(req, "400 Bad Request", "Invalid collection settings");
     if (xSemaphoreTake(col_lock, pdMS_TO_TICKS(1000)) != pdTRUE)
         return api_error(req, "503 Service Unavailable", "Collection is busy");
@@ -506,14 +591,14 @@ static esp_err_t collection_start_post(httpd_req_t *req)
         if (sessions[i].id >= next_id) next_id = sessions[i].id + 1;
     uint32_t pending_done = col_cfg.pending_done_id, pending_full = col_cfg.pending_full_id;
     col_cfg = (col_config_t){ .session_id = next_id, .interval_ms = interval, .target = target,
-        .limit_kind = (uint8_t)kind, .function = current_fun, .display_unit = (uint8_t)unit, .active = 1 };
+        .limit_kind = (uint8_t)kind, .function = current_fun, .display_unit = 0, .active = 1 };
     col_cfg.pending_done_id = pending_done;
     col_cfg.pending_full_id = pending_full;
     esp_err_t err = cfg_save();
     if (err == ESP_OK) {
         col_record_t start = { .session_id = next_id, .utc_s = now_utc_s(),
             .value_raw = interval, .kind_flags = COL_START, .function = current_fun,
-            .unit = (uint8_t)unit | (now_tenth() << 4) };
+            .unit = now_tenth() << 4 };
         err = write_record(&start);
     }
     if (err == ESP_OK) {
@@ -543,23 +628,45 @@ static esp_err_t collection_stop_post(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"accepted\":true}");
 }
 
+static esp_err_t collection_rename_post(httpd_req_t *req)
+{
+    char body[128], name[32], key[16];
+    uint32_t id;
+    if (!read_form(req, body, sizeof(body)) || !form_number(body, "id", &id) ||
+        !form_value(body, "name", name, sizeof(name)) || !name[0])
+        return api_error(req, "400 Bad Request", "Invalid collection name");
+    col_summary_t *summary = summary_for(id, false);
+    if (!summary) return api_error(req, "404 Not Found", "Collection not found");
+    nvs_handle_t nvs;
+    session_name_key(id, key, sizeof(key));
+    esp_err_t err = nvs_open("collection", NVS_READWRITE, &nvs);
+    if (err == ESP_OK) err = nvs_set_str(nvs, key, name);
+    if (err == ESP_OK) err = nvs_commit(nvs);
+    if (nvs) nvs_close(nvs);
+    if (err != ESP_OK) return api_error(req, "500 Internal Server Error", "Unable to save collection name");
+    strlcpy(summary->name, name, sizeof(summary->name));
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"accepted\":true}");
+}
+
 static esp_err_t collection_sessions_get(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send_chunk(req, "{\"sessions\":[", HTTPD_RESP_USE_STRLEN);
     xSemaphoreTake(col_lock, portMAX_DELAY);
     if (!storage_ready) scan_storage();
-    char json[360];
+    char json[480], escaped_name[70];
     for (size_t i = 0; i < session_count; ++i) {
         col_summary_t *s = &sessions[session_count - 1 - i];
+        json_escape_local(s->name, escaped_name, sizeof(escaped_name));
         snprintf(json, sizeof(json),
-            "%s{\"id\":%" PRIu32 ",\"count\":%" PRIu32 ",\"first_sequence\":%" PRIu32
+            "%s{\"id\":%" PRIu32 ",\"name\":\"%s\",\"count\":%" PRIu32 ",\"start_utc_s\":%" PRIu32 ",\"first_sequence\":%" PRIu32
             ",\"last_sequence\":%" PRIu32 ",\"first_utc_s\":%" PRIu32
             ",\"last_utc_s\":%" PRIu32 ",\"elapsed_ds\":%" PRIu32
-            ",\"interval_ms\":%" PRIu32 ",\"function\":%u,\"unit\":%u,\"collecting\":%s}",
-            i ? "," : "", s->id, s->count, s->first_seq, s->last_seq,
+            ",\"interval_ms\":%" PRIu32 ",\"function\":\"%s\",\"function_id\":%u,\"collecting\":%s}",
+            i ? "," : "", s->id, escaped_name, s->count, s->start_utc_s, s->first_seq, s->last_seq,
             s->first_utc_s, s->last_utc_s, s->elapsed_ds, s->interval_ms,
-            s->function, s->unit, col_active && s->id == col_cfg.session_id ? "true" : "false");
+            function_name(s->function), s->function, col_active && s->id == col_cfg.session_id ? "true" : "false");
         if (httpd_resp_send_chunk(req, json, HTTPD_RESP_USE_STRLEN) != ESP_OK) break;
     }
     xSemaphoreGive(col_lock);
@@ -578,10 +685,10 @@ static int csv_line(const col_record_t *r, char *out, size_t cap)
         localtime_r(&sec, &tmv);
         strftime(local, sizeof(local), "%Y-%m-%dT%H:%M:%S%z", &tmv);
     }
-    return snprintf(out, cap, "%" PRIu32 ",%s.%uZ,%s,%" PRIu32 ",%" PRIu32
-        ",%u,%u,%u,%u,%u,%u,%u\n", r->log_sequence, utc, (unsigned)((r->unit >> 4) & 0x0f),
-        local, r->elapsed_ds, r->value_raw, r->kind_flags & 4U ? 1U : 0U,
-        r->unit & 0x0f, r->function, r->range, r->kind_flags & 8U ? 1U : 0U,
+    return snprintf(out, cap, "%" PRIu32 ",%s.%uZ,%s,%" PRIu32 ",%.9g,%s,%s,%s,%u,%u,%" PRIu32 "\n",
+        r->log_sequence, utc, (unsigned)((r->unit >> 4) & 0x0f), local, r->elapsed_ds,
+        standard_value(r), standard_unit(r->function), function_name(r->function),
+        range_name(r->range), r->kind_flags & 8U ? 1U : 0U,
         r->kind_flags & 16U ? 1U : 0U, r->session_id);
 }
 
@@ -606,10 +713,10 @@ static esp_err_t collection_records_get(httpd_req_t *req)
         if (seen++ < offset) continue;
         snprintf(json, sizeof(json),
             "%s{\"sequence\":%" PRIu32 ",\"utc_s\":%" PRIu32 ",\"elapsed_ds\":%" PRIu32
-            ",\"value_raw\":%" PRIu32 ",\"sign\":%u,\"unit\":%u,\"function\":%u,"
-            "\"range\":%u,\"valid\":%s,\"overrange\":%s}", emitted ? "," : "",
-            r.log_sequence, r.utc_s, r.elapsed_ds, r.value_raw, r.kind_flags & 4U ? 1U : 0U,
-            r.unit & 0x0f, r.function, r.range, r.kind_flags & 8U ? "true" : "false",
+            ",\"value_raw\":%.9g,\"unit_code\":\"%s\",\"function\":\"%s\","
+            "\"range\":\"%s\",\"valid\":%s,\"overrange\":%s}", emitted ? "," : "",
+            r.log_sequence, r.utc_s, r.elapsed_ds, standard_value(&r), standard_unit(r.function),
+            function_name(r.function), range_name(r.range), r.kind_flags & 8U ? "true" : "false",
             r.kind_flags & 16U ? "true" : "false");
         if (httpd_resp_send_chunk(req, json, HTTPD_RESP_USE_STRLEN) != ESP_OK) break;
         emitted++;
@@ -637,7 +744,7 @@ static esp_err_t collection_csv_get(httpd_req_t *req)
     httpd_resp_set_type(req, "text/csv; charset=utf-8");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=doer-collection.csv");
     esp_err_t result = httpd_resp_send_chunk(req,
-        "sequence,utc,local,elapsed_ds,value_raw,sign,unit_code,function,range,valid,overrange,session_id\n",
+        "sequence,utc,local,elapsed_ds,value_raw,unit_code,function,range,valid,overrange,session_id\n",
         HTTPD_RESP_USE_STRLEN);
     char line[200];
     col_record_t r;
@@ -708,7 +815,7 @@ static bool telegram_csv(uint32_t id)
     xSemaphoreGive(col_lock);
 
     static const char *csv_header =
-        "sequence,utc,local,elapsed_ds,value_raw,sign,unit_code,function,range,valid,overrange,session_id\n";
+        "sequence,utc,local,elapsed_ds,value_raw,unit_code,function,range,valid,overrange,session_id\n";
     static const char *boundary = "doercollectionboundary";
     char prefix[300];
     int prefix_len = snprintf(prefix, sizeof(prefix),
@@ -903,6 +1010,7 @@ esp_err_t collection_register_handlers(httpd_handle_t server)
         {.uri="/api/collection/status", .method=HTTP_GET, .handler=collection_status_get},
         {.uri="/api/collection/start", .method=HTTP_POST, .handler=collection_start_post},
         {.uri="/api/collection/stop", .method=HTTP_POST, .handler=collection_stop_post},
+        {.uri="/api/collection/rename", .method=HTTP_POST, .handler=collection_rename_post},
         {.uri="/api/collection/sessions", .method=HTTP_GET, .handler=collection_sessions_get},
         {.uri="/api/collection/records", .method=HTTP_GET, .handler=collection_records_get},
         {.uri="/api/collection/csv", .method=HTTP_GET, .handler=collection_csv_get},
