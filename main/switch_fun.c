@@ -169,7 +169,6 @@ bool switch_range_is_locked(uint8_t *range)
 
 
 uint8_t K1Set,K1Cnt;
-#define POWER_ON_HOLD_TICKS 5
 #define KEY_DOUBLE_CLICK_WINDOW_US (2000000LL)
 
 /* A short press is held briefly so a second press can be recognized as a
@@ -321,13 +320,7 @@ void switch_fun_task(void *arg)
    uint8_t key_add = 0;
 
    wait=0;
-
-   while(1)//Hold briefly to power on
-   {
-      vTaskDelay(pdMS_TO_TICKS(90));
-      if(++key_add >= POWER_ON_HOLD_TICKS) break;
-      if((gpio_get_level(KEY)!=0)) key_add = 0;
-   }
+   /* gpio_init() already enabled the power latch before this task was created. */
    gpio_set_level(PWR_EN, 1);
    gpio_set_level(BEEP, 1);
    vTaskDelay(pdMS_TO_TICKS(200));
