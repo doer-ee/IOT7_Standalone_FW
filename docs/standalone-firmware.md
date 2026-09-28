@@ -21,7 +21,17 @@ The old `POST /api/control/period` endpoint and Report period control were remov
 
 ## Persistent data and recovery
 
-The cleanup does not erase NVS. The router credentials, calibration values, selected function, and device ID still use their existing keys. The obsolete `parameter/password` and `parameter/c_freq` keys are left in flash but are no longer read or written. The partition table and `ota_0` image are unchanged. The current build can be written to `ota_1` at `0x200000` using the established ROM USB procedure, after checking the device's partition table.
+The cleanup does not erase NVS. The router credentials, calibration values, selected function, and device ID still use their existing keys. The obsolete `parameter/password` and `parameter/c_freq` keys are left in flash but are no longer read or written.
+
+The 4 MiB flash layout reserves two 1 MiB OTA application slots and a separate SPIFFS partition for future measurement records:
+
+| Partition | Offset | Size | Purpose |
+| --- | ---: | ---: | --- |
+| `ota_0` | `0x10000` | `0x100000` | OTA application slot 0 |
+| `ota_1` | `0x110000` | `0x100000` | OTA application slot 1 |
+| `data_collection` | `0x210000` | `0x1F0000` | Future measurement storage |
+
+The current application image is below 1 MiB. The data partition is reserved by the partition table but is not mounted or written by the current firmware yet. Changing to this layout moves `ota_1` from `0x200000` to `0x110000`; the first layout migration must therefore flash the new partition table and an application image at the new slot address instead of writing only the old OTA1 address.
 
 ## Validation after flashing
 
