@@ -406,6 +406,7 @@
     function clearContinuation() {
       pendingContinuation=null;
       el('continue_panel').hidden=true;
+      el('confirm_continue').disabled=false;
       setNewCollectionControlsDisabled(false);
       setText('collection_function',functionNameFor(activeFunction));
     }
