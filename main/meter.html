@@ -510,7 +510,7 @@
           const select=document.createElement('input'); select.type='checkbox'; select.value=s.id; select.disabled=!!s.collecting; select.title=s.collecting?'Stop this collection before deleting it':'Select this collection for deletion'; select.addEventListener('change',updateCollectionSelection);
           const name=document.createElement('input'); name.className='session-name'; name.value=s.name||('Collection #'+s.id); name.maxLength=31;
           const saveName=document.createElement('button'); saveName.textContent='Save name'; saveName.onclick=async()=>{try{await post('/api/collection/rename','id='+s.id+'&name='+encodeURIComponent(name.value.trim()));collectionMessage('Collection name saved.')}catch(e){collectionMessage(e.message,true)}};
-          selectLabel.append(select,name); const titleLine=document.createElement('div'); titleLine.className='session-actions'; titleLine.append(selectLabel,saveName);
+          selectLabel.append(select); const titleLine=document.createElement('div'); titleLine.className='session-actions'; titleLine.append(selectLabel,name,saveName);
           const meta=document.createElement('small'); const start=s.start_utc_s?new Date(s.start_utc_s*1000).toLocaleString():'Time unavailable';
           meta.textContent=start+' · '+s.function+' · '+s.count+' samples · '+intervalLabel(s.interval_ms)+' · '+(s.settings_known?lengthLabel(s.limit_kind,s.target):'Length unavailable')+(s.collecting?' · Collecting':'');
           row.append(titleLine,meta);
