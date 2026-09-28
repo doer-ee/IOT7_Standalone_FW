@@ -139,6 +139,14 @@
     .session-actions button { min-height:28px; padding:4px 8px; border:1px solid #536171; border-radius:7px; background:#243541; color:#d9e4eb; font-size:10px; font-weight:750; }
     .session-actions button:disabled { cursor:not-allowed; }
     .session-name { width:100%; min-height:29px; padding:5px 7px; border:1px solid #405260; border-radius:7px; background:#0f1b24; color:#eef5f8; font-size:12px; font-weight:750; }
+    .session-select { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:12px 0 10px; }
+    .session-select label { display:flex; align-items:center; gap:7px; color:#a9bbc7; font-size:11px; font-weight:750; white-space:nowrap; }
+    .session-select input,.session-choice input { width:15px; height:15px; margin:0; accent-color:var(--orange); cursor:pointer; }
+    .session-select input:disabled,.session-choice input:disabled { cursor:not-allowed; }
+    .session-select button { min-height:29px; padding:4px 9px; border:1px solid #a65757; border-radius:7px; background:#45272b; color:#ffcccc; font-size:10px; font-weight:750; }
+    .session-select button:disabled { cursor:not-allowed; opacity:.5; }
+    .session-choice { display:flex; align-items:center; gap:9px; min-width:0; flex:1; }
+    .session-choice .session-name { flex:1; min-width:0; }
     .settings-layout { display:grid; grid-template-columns:minmax(170px,220px) minmax(0,1fr); gap:16px; flex:1 1 auto; min-height:0; margin-top:18px; overflow:hidden; }
     .settings-nav { min-height:0; overflow:auto; padding:10px; border:1px solid #30404d; border-radius:15px; background:#17232e; }
     .settings-tab { display:flex; align-items:center; width:100%; min-height:42px; margin:0 0 6px; padding:9px 11px; border:1px solid transparent; border-radius:9px; background:transparent; color:#9eb0bd; text-align:left; font-size:12px; font-weight:800; transition:background .15s,border-color .15s,color .15s,transform .15s; }
@@ -185,7 +193,7 @@
       <div class="actions"><button id="hold_button" class="action" type="button">Hold</button><button id="mark_button" class="action" type="button">Mark reading</button><button id="zero_button" class="action" type="button">Zero</button></div>
       <p id="feedback" class="feedback" role="status">Updates every second.</p>
     </main>
-    <main id="data_page" class="page hidden"><div class="page-head"><div><div class="eyebrow">Measurement tools</div><h1>Data collection</h1><p id="collection_clock" class="settings-message">Checking clock…</p><p class="settings-message">Wi-Fi pauses after 3 minutes without web access while collecting. Press the device button once to reconnect; recording continues.</p></div><button id="back_button" class="action" type="button">Back</button></div><section class="collection-layout"><div class="collection-card"><h2 id="collection_card_title">New collection</h2><p class="collection-function">Function: <strong id="collection_function">Voltage</strong></p><div class="collection-grid"><label>Interval<select id="collection_interval"><option value="500">0.5 s</option><option value="1000" selected>1 s</option><option value="2000">2 s</option><option value="5000">5 s</option><option value="10000">10 s</option><option value="60000">1 min</option><option value="300000">5 min</option><option value="600000">10 min</option><option value="3600000">1 h</option><option value="custom">Other</option></select></label><label id="custom_interval_wrap" class="hidden">Custom ms<input id="custom_interval" type="number" min="500" max="3600000" value="1000"></label></div><div class="collection-grid collection-length-row"><label>Length<select id="collection_limit"><option value="0">Infinite</option><option value="1">Samples</option><option value="2">Minutes</option></select></label><label id="collection_target_wrap" class="hidden">Target<input id="collection_target" type="number" min="1" value="60"></label></div><div class="collection-actions"><button id="start_collection" class="action">Start collection</button><button id="stop_collection" class="action" disabled>Stop collection</button></div><p id="collection_message" class="feedback"></p></div><div class="collection-card"><div class="collection-card-head"><h2>Saved collections</h2><span id="collection_capacity">--</span></div><div id="session_list" class="session-list"><p class="settings-message">No collections yet.</p></div></div></section><button id="back_button_bottom" class="action" type="button">Back to meter</button></main>
+    <main id="data_page" class="page hidden"><div class="page-head"><div><div class="eyebrow">Measurement tools</div><h1>Data collection</h1><p id="collection_clock" class="settings-message">Checking clock…</p><p class="settings-message">Wi-Fi pauses after 3 minutes without web access while collecting. Press the device button once to reconnect; recording continues.</p></div><button id="back_button" class="action" type="button">Back</button></div><section class="collection-layout"><div class="collection-card"><h2 id="collection_card_title">New collection</h2><p class="collection-function">Function: <strong id="collection_function">Voltage</strong></p><div class="collection-grid"><label>Interval<select id="collection_interval"><option value="500">0.5 s</option><option value="1000" selected>1 s</option><option value="2000">2 s</option><option value="5000">5 s</option><option value="10000">10 s</option><option value="60000">1 min</option><option value="300000">5 min</option><option value="600000">10 min</option><option value="3600000">1 h</option><option value="custom">Other</option></select></label><label id="custom_interval_wrap" class="hidden">Custom ms<input id="custom_interval" type="number" min="500" max="3600000" value="1000"></label></div><div class="collection-grid collection-length-row"><label>Length<select id="collection_limit"><option value="0">Infinite</option><option value="1">Samples</option><option value="2">Minutes</option></select></label><label id="collection_target_wrap" class="hidden">Target<input id="collection_target" type="number" min="1" value="60"></label></div><div class="collection-actions"><button id="start_collection" class="action">Start collection</button><button id="stop_collection" class="action" disabled>Stop collection</button></div><p id="collection_message" class="feedback"></p></div><div class="collection-card"><div class="collection-card-head"><h2>Saved collections</h2></div><div class="session-select"><label><input id="select_all_collections" type="checkbox">Select all</label><button id="delete_selected_collections" type="button" disabled>Delete selected</button></div><div id="session_list" class="session-list"><p class="settings-message">No collections yet.</p></div></div></section><button id="back_button_bottom" class="action" type="button">Back to meter</button></main>
     <main id="settings_page" class="page hidden">
       <div class="page-head"><div><div class="eyebrow">Device configuration</div><h1>Settings</h1></div><button id="settings_back" class="action" type="button">Back</button></div>
       <section class="settings-layout">
@@ -393,6 +401,27 @@
     const collectionIntervals=[['500','0.5 s'],['1000','1 s'],['2000','2 s'],['5000','5 s'],['10000','10 s'],['60000','1 min'],['300000','5 min'],['600000','10 min'],['3600000','1 h']];
     function intervalLabel(ms) { const known=collectionIntervals.find(([value])=>Number(value)===Number(ms)); return known ? known[1] : (Number(ms)/1000).toFixed(Number(ms)%1000 ? 3 : 0)+' s'; }
     function lengthLabel(kind,target) { return Number(kind)===0 ? 'Infinite' : Number(kind)===1 ? Number(target)+' samples' : Number(target)+' min'; }
+    function selectedCollectionIds() { return Array.from(document.querySelectorAll('.session-choice input[type="checkbox"]:checked')).map(input=>Number(input.value)); }
+    function updateCollectionSelection() {
+      const boxes=Array.from(document.querySelectorAll('.session-choice input[type="checkbox"]'));
+      const selected=boxes.filter(input=>input.checked);
+      el('select_all_collections').checked=boxes.length>0 && selected.length===boxes.length;
+      el('select_all_collections').indeterminate=selected.length>0 && selected.length<boxes.length;
+      el('delete_selected_collections').disabled=selected.length===0;
+    }
+    async function deleteCollections(ids) {
+      if (!ids.length) return;
+      if (!confirm('Delete '+ids.length+' selected collection'+(ids.length===1?'':'s')+' and its saved records?')) return;
+      el('delete_selected_collections').disabled=true;
+      try {
+        for (const id of ids) await post('/api/collection/delete','id='+id);
+        collectionMessage(ids.length===1?'Collection deleted.':ids.length+' collections deleted.');
+        refreshCollection();
+      } catch (e) {
+        collectionMessage('Unable to delete all selected collections: '+e.message,true);
+        refreshCollection();
+      }
+    }
     function setCollectionControlsDisabled(disabled) {
       ['collection_interval','custom_interval','collection_limit','collection_target'].forEach(id => { el(id).disabled=disabled; });
     }
@@ -448,7 +477,6 @@
       try {
         const [status,list,settings]=await Promise.all([getJson('/api/collection/status'),getJson('/api/collection/sessions'),getJson('/api/collection/settings')]);
         setText('collection_clock',settings.time_synced?'Clock synchronized':'Clock not synchronized'); el('collection_clock').className='settings-message '+(settings.time_synced?'':'error');
-        setText('collection_capacity',status.used_percent+'% full · '+status.capacity_records+' records');
         if (status.active) showActiveCollection(status,list.sessions);
         if (!status.active && continuationSessionId && !pendingContinuation) resetNewCollectionForm();
         if (pendingContinuation) {
@@ -461,12 +489,15 @@
           setText('start_collection','Start collection'); setText('stop_collection','Stop collection');
           setCollectionControlsDisabled(!!status.active); el('start_collection').disabled=!!status.active; el('stop_collection').disabled=!status.active;
         }
-        const holder=el('session_list'); holder.replaceChildren(); if (!list.sessions.length) { holder.innerHTML='<p class="settings-message">No collections yet.</p>'; return; }
+        const holder=el('session_list'); holder.replaceChildren(); if (!list.sessions.length) { holder.innerHTML='<p class="settings-message">No collections yet.</p>'; el('select_all_collections').checked=false; el('select_all_collections').indeterminate=false; el('select_all_collections').disabled=true; el('delete_selected_collections').disabled=true; return; }
+        el('select_all_collections').disabled=false;
         list.sessions.forEach(s=>{
           const row=document.createElement('div'); row.className='session';
+          const selectLabel=document.createElement('label'); selectLabel.className='session-choice';
+          const select=document.createElement('input'); select.type='checkbox'; select.value=s.id; select.disabled=!!s.collecting; select.title=s.collecting?'Stop this collection before deleting it':'Select this collection for deletion'; select.addEventListener('change',updateCollectionSelection);
           const name=document.createElement('input'); name.className='session-name'; name.value=s.name||('Collection #'+s.id); name.maxLength=31;
           const saveName=document.createElement('button'); saveName.textContent='Save name'; saveName.onclick=async()=>{try{await post('/api/collection/rename','id='+s.id+'&name='+encodeURIComponent(name.value.trim()));collectionMessage('Collection name saved.')}catch(e){collectionMessage(e.message,true)}};
-          const titleLine=document.createElement('div'); titleLine.className='session-actions'; titleLine.append(name,saveName);
+          selectLabel.append(select,name); const titleLine=document.createElement('div'); titleLine.className='session-actions'; titleLine.append(selectLabel,saveName);
           const meta=document.createElement('small'); const start=s.start_utc_s?new Date(s.start_utc_s*1000).toLocaleString():'Time unavailable';
           meta.textContent=start+' · '+s.function+' · '+s.count+' samples · '+intervalLabel(s.interval_ms)+' · '+(s.settings_known?lengthLabel(s.limit_kind,s.target):'Length unavailable')+(s.collecting?' · Collecting':'');
           row.append(titleLine,meta);
@@ -477,8 +508,11 @@
           const remove=document.createElement('button'); remove.textContent='Delete'; remove.disabled=!!s.collecting; remove.onclick=async()=>{if(!confirm('Delete this collection and its saved records?'))return;remove.disabled=true;try{await post('/api/collection/delete','id='+s.id);collectionMessage('Collection deleted.');refreshCollection();}catch(e){remove.disabled=false;collectionMessage(e.message,true)}};
           actions.append(csv,send,resume,remove); row.appendChild(actions); holder.appendChild(row);
         });
+        updateCollectionSelection();
       } catch (e) { collectionMessage('Collection service unavailable: '+e.message,true); }
     }
+    el('select_all_collections').addEventListener('change',()=>{ document.querySelectorAll('.session-choice input[type="checkbox"]:not(:disabled)').forEach(input=>{input.checked=el('select_all_collections').checked;}); updateCollectionSelection(); });
+    el('delete_selected_collections').addEventListener('click',()=>deleteCollections(selectedCollectionIds()));
     el('start_collection').addEventListener('click',async()=>{
       if (pendingContinuation) {
         const session=pendingContinuation;
