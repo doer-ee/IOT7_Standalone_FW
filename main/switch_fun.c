@@ -275,10 +275,7 @@ void KeyScan()
                   }
                   key_click_pending = true;
                   key_first_click_us = now_us;
-                  gpio_set_level(BEEP, 1);
-                  vTaskDelay(pdMS_TO_TICKS(100));
-                  gpio_set_level(BEEP, 0);
-               }
+			 }
 			 }
 		}
 }
