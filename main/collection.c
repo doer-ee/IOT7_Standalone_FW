@@ -156,6 +156,26 @@ static void json_escape_local(const char *src, char *dst, size_t cap)
     dst[used] = 0;
 }
 
+static void csv_filename(uint32_t session_id, const char *name, char *out, size_t cap)
+{
+    size_t used = 0;
+    if (cap == 0) return;
+    for (size_t i = 0; name && name[i] && used + 5 < cap; ++i) {
+        unsigned char c = (unsigned char)name[i];
+        if (isalnum(c) || c == '-' || c == '_' || c == '.') {
+            out[used++] = (char)c;
+        } else if (isspace(c) && used > 0 && out[used - 1] != '_') {
+            out[used++] = '_';
+        }
+    }
+    while (used > 0 && (out[used - 1] == '_' || out[used - 1] == '.')) used--;
+    if (used == 0) {
+        snprintf(out, cap, "collection-%" PRIu32 ".csv", session_id);
+        return;
+    }
+    snprintf(out + used, cap - used, ".csv");
+}
+
 static void session_name_key(uint32_t id, char *key, size_t cap)
 {
     snprintf(key, cap, "name_%08" PRIx32, id);
@@ -751,6 +771,7 @@ static esp_err_t collection_csv_get(httpd_req_t *req)
 {
     uint32_t id;
     if (!query_number(req, "id", &id)) return api_error(req, "400 Bad Request", "Missing session ID");
+    char filename[80];
     xSemaphoreTake(col_lock, portMAX_DELAY);
     if (!storage_ready) scan_storage();
     col_summary_t *s = summary_for(id, false);
@@ -759,10 +780,13 @@ static esp_err_t collection_csv_get(httpd_req_t *req)
         return api_error(req, "404 Not Found", "Session unavailable or export busy");
     }
     uint32_t endpoint = s->last_seq;
+    csv_filename(id, s->name, filename, sizeof(filename));
     export_active = true;
     xSemaphoreGive(col_lock);
     httpd_resp_set_type(req, "text/csv; charset=utf-8");
-    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=doer-collection.csv");
+    char disposition[112];
+    snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"", filename);
+    httpd_resp_set_hdr(req, "Content-Disposition", disposition);
     esp_err_t result = httpd_resp_send_chunk(req,
         "sequence,utc,local,elapsed_ds,value_raw,unit_code,function,range,valid,overrange,session_id\n",
         HTTPD_RESP_USE_STRLEN);
@@ -826,11 +850,13 @@ static bool telegram_text(uint32_t id, bool full)
 static bool telegram_csv(uint32_t id)
 {
     if (!telegram_token[0] || !telegram_chat[0] || net_state == 0 || !time_synced) return false;
+    char filename[80];
     xSemaphoreTake(col_lock, portMAX_DELAY);
     col_summary_t *s = summary_for(id, false);
     if (!s || !s->count || export_active) { xSemaphoreGive(col_lock); return false; }
     uint32_t endpoint = s->last_seq;
     uint32_t origin = write_slot;
+    csv_filename(id, s->name, filename, sizeof(filename));
     export_active = true;
     xSemaphoreGive(col_lock);
 
@@ -840,8 +866,8 @@ static bool telegram_csv(uint32_t id)
     char prefix[300];
     int prefix_len = snprintf(prefix, sizeof(prefix),
         "--%s\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n%s\r\n"
-        "--%s\r\nContent-Disposition: form-data; name=\"document\"; filename=\"doer-%" PRIu32
-        ".csv\"\r\nContent-Type: text/csv\r\n\r\n", boundary, telegram_chat, boundary, id);
+        "--%s\r\nContent-Disposition: form-data; name=\"document\"; filename=\"%s\"\r\n"
+        "Content-Type: text/csv\r\n\r\n", boundary, telegram_chat, boundary, filename);
     char suffix[80];
     int suffix_len = snprintf(suffix, sizeof(suffix), "\r\n--%s--\r\n", boundary);
     char line[200];
