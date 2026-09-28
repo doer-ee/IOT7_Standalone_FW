@@ -1431,6 +1431,21 @@ void wifinet_task(void *arg)
                 net_state = 0;
             }
             vTaskDelay(pdMS_TO_TICKS(1500));
+            /*
+             * GPIO35 drives the external power latch. A normal reset can
+             * briefly release that GPIO before the bootloader runs, which
+             * removes power before the new OTA image can start. Keep the
+             * output high across the reset; the new application releases
+             * the hold after it has configured the pin.
+             */
+            gpio_set_level(PWR_EN, 1);
+            esp_err_t hold_err = gpio_hold_en(PWR_EN);
+            if (hold_err != ESP_OK) {
+                ESP_LOGW(WIFINET, "Unable to hold power latch during OTA reset: %s",
+                         esp_err_to_name(hold_err));
+            } else {
+                ESP_LOGI(WIFINET, "OTA restart: power latch held high during reset");
+            }
             ESP_LOGI(WIFINET, "OTA restart: using standard system reset");
             esp_restart();
         }

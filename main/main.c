@@ -68,6 +68,9 @@ void gpio_init(void)
    gpio_set_direction(PWR_EN, GPIO_MODE_OUTPUT);
    /* Keep the hardware power latch enabled as soon as GPIO is configured. */
    gpio_set_level(PWR_EN, 1);
+   /* Release a reset-time GPIO hold left by the OTA restart path. */
+   gpio_hold_dis(PWR_EN);
+   gpio_set_level(PWR_EN, 1);
 
    gpio_pad_select_gpio(K1);
    gpio_set_direction(K1, GPIO_MODE_OUTPUT);
