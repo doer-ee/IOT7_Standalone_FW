@@ -407,6 +407,13 @@
       el('collection_target').value=Number(target) || 60;
       el('collection_target_wrap').classList.toggle('hidden',Number(kind)===0);
     }
+    function showActiveCollection(status,sessions) {
+      const session=sessions.find(item=>Number(item.id)===Number(status.session_id));
+      setText('collection_card_title',session && session.name ? session.name : 'Collection #'+status.session_id);
+      setText('collection_function',session && session.function ? session.function : functionNameFor(session && session.function_id ? session.function_id : activeFunction));
+      setCollectionInterval(status.interval_ms || (session && session.interval_ms));
+      setCollectionLength(status.limit_kind, status.target);
+    }
     function resetNewCollectionForm() {
       pendingContinuation=null;
       continuationSessionId=null;
@@ -442,6 +449,7 @@
         const [status,list,settings]=await Promise.all([getJson('/api/collection/status'),getJson('/api/collection/sessions'),getJson('/api/collection/settings')]);
         setText('collection_clock',settings.time_synced?'Clock synchronized':'Clock not synchronized'); el('collection_clock').className='settings-message '+(settings.time_synced?'':'error');
         setText('collection_capacity',status.used_percent+'% full · '+status.capacity_records+' records');
+        if (status.active) showActiveCollection(status,list.sessions);
         if (!status.active && continuationSessionId && !pendingContinuation) resetNewCollectionForm();
         if (pendingContinuation) {
           setText('start_collection','Continue Collection'); setText('stop_collection','Cancel');
