@@ -39,5 +39,7 @@ extern uint8_t current_fun_old;
 void switch_fun_task(void *arg);
 void beep_start(uint8_t duration);
 void analog_switch(uint8_t sw);
+void switch_range_lock(bool locked, uint8_t range);
+bool switch_range_is_locked(uint8_t *range);
 
 #endif

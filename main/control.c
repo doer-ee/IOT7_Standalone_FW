@@ -64,11 +64,14 @@ static void control_apply_function(const control_command_t *command)
     measurement_snapshot_t snapshot;
 
     control_begin_command(command);
+    switch_range_lock(false, ASW_OFF);
     current_fun = command->function_id;
     measurement_invalidate_snapshot();
     portENTER_CRITICAL(&control_mux);
     control_state.function_id = command->function_id;
     control_state.function_pending = true;
+    control_state.range_pending = false;
+    control_state.range_auto = true;
     control_state.range = current_sw;
     portEXIT_CRITICAL(&control_mux);
 
@@ -79,6 +82,35 @@ static void control_apply_function(const control_command_t *command)
         ESP_LOGI(CONTROL_TAG, "Function request %u applied; waiting for first snapshot",
                  (unsigned)command->request_id);
     }
+}
+
+static bool control_range_matches_function(uint8_t function_id, uint8_t range)
+{
+    switch (function_id) {
+        case 1: return range >= ASW_DCV1 && range <= ASW_DCV3;
+        case 2: return range >= ASW_ACV1 && range <= ASW_ACV3;
+        case 3: return range == ASW_DCMA;
+        case 4: return range == ASW_DCA;
+        case 5: return range == ASW_ACMA;
+        case 6: return range == ASW_ACA;
+        case 7: return range >= ASW_R2 && range <= ASW_R5;
+        case 8: return range == ASW_BEEP;
+        case 11: return range == ASW_R5;
+        default: return false;
+    }
+}
+
+static void control_apply_range(const control_command_t *command)
+{
+    control_begin_command(command);
+    switch_range_lock(command->range != ASW_OFF, command->range);
+    measurement_invalidate_snapshot();
+    portENTER_CRITICAL(&control_mux);
+    control_state.range_pending = command->range != ASW_OFF;
+    control_state.range_auto = command->range == ASW_OFF;
+    control_state.range = command->range == ASW_OFF ? current_sw : command->range;
+    portEXIT_CRITICAL(&control_mux);
+    ESP_LOGI(CONTROL_TAG, "Measurement range %s", command->range == ASW_OFF ? "automatic" : "locked");
 }
 
 static void control_apply_hold(const control_command_t *command)
@@ -140,6 +172,9 @@ static void control_task(void *arg)
             case CONTROL_SET_FUNCTION:
                 control_apply_function(&command);
                 break;
+            case CONTROL_SET_RANGE:
+                control_apply_range(&command);
+                break;
             case CONTROL_SET_HOLD:
                 control_apply_hold(&command);
                 break;
@@ -169,6 +204,7 @@ void control_init(void)
     memset(&control_state, 0, sizeof(control_state));
     control_state.function_id = current_fun;
     control_state.range = current_sw;
+    control_state.range_auto = true;
     control_state.last_command_ok = true;
     xTaskCreate(control_task, "CONTROL", 1024 * 3, NULL, 8, NULL);
 }
@@ -181,6 +217,18 @@ esp_err_t control_submit_function(uint8_t function_id, uint32_t *request_id)
     control_command_t command = {
         .type = CONTROL_SET_FUNCTION,
         .function_id = function_id,
+    };
+    return control_enqueue(&command, request_id);
+}
+
+esp_err_t control_submit_range(uint8_t range, uint32_t *request_id)
+{
+    if (range != ASW_OFF && !control_range_matches_function(current_fun, range)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    control_command_t command = {
+        .type = CONTROL_SET_RANGE,
+        .range = range,
     };
     return control_enqueue(&command, request_id);
 }
@@ -270,12 +318,22 @@ bool control_zero_is_pending(void)
     return pending;
 }
 
+bool control_range_is_locked(uint8_t *range)
+{
+    return switch_range_is_locked(range);
+}
+
 void control_notify_sample(uint8_t function_id, uint8_t range, bool valid, bool overrange,
                            bool range_ready)
 {
     portENTER_CRITICAL(&control_mux);
     if (range_ready && control_state.function_pending && control_state.function_id == function_id) {
         control_state.function_pending = false;
+        control_state.range = range;
+    }
+    if (range_ready && control_state.range_pending &&
+        (!control_state.range_auto ? control_state.range == range : true)) {
+        control_state.range_pending = false;
         control_state.range = range;
     }
     if (control_state.zero_pending) {

@@ -16,5 +16,6 @@ REQUIRES
     esp_timer
     esp_wifi
     freertos
+    mdns
     nvs_flash
     tcpip_adapter)

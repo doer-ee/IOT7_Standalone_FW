@@ -162,6 +162,7 @@ void I2C_Init()
 void measure_dcv(uint32_t ad_dat)
 {
 	  int64_t Vol;
+	  const bool auto_range = !control_range_is_locked(NULL);
 	  int lsdat=0;
 	  int dat=0;
 	
@@ -196,7 +197,7 @@ void measure_dcv(uint32_t ad_dat)
 				Vol*=Slope[0];
 				
 			  if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"DCV1 Vol=%lld\r\n",Vol);
-			  if(Vol<70000000)//Switch range below 70 V
+			  if(auto_range && Vol<70000000)//Switch range below 70 V
 				{
 						analog_switch(ASW_DCV2);
 						vTaskDelay(pdMS_TO_TICKS(100));
@@ -220,7 +221,7 @@ void measure_dcv(uint32_t ad_dat)
 				Vol*=Slope[1];
 				
 			  if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"DCV2 Vol=%lld\r\n",Vol);
-			  if(Vol<8000000)//Switch range below 8 V
+			  if(auto_range && Vol<8000000)//Switch range below 8 V
 				{
 						analog_switch(ASW_DCV3);
 						vTaskDelay(pdMS_TO_TICKS(100));
@@ -228,7 +229,7 @@ void measure_dcv(uint32_t ad_dat)
 						vTaskDelay(pdMS_TO_TICKS(100));
 						MCP3421_ReadReg();
 				}
-				else if(Vol>65000000)//Switch range below 65 V
+				else if(auto_range && Vol>65000000)//Switch range below 65 V
 				{
 						analog_switch(ASW_DCV1);
 						vTaskDelay(pdMS_TO_TICKS(100));
@@ -252,7 +253,7 @@ void measure_dcv(uint32_t ad_dat)
 				Vol*=Slope[2];
 			   
 			  if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"DCV3 Vol=%lld\r\n",Vol);
-			  if(Vol>9000000)//Switch range above 9 V
+			  if(auto_range && Vol>9000000)//Switch range above 9 V
 				{
 						analog_switch(ASW_DCV2);
 						vTaskDelay(pdMS_TO_TICKS(100));
@@ -292,6 +293,7 @@ void measure_dcv(uint32_t ad_dat)
 void measure_acv(uint32_t ad_dat)
 {
   int64_t Vol;
+	  const bool auto_range = !control_range_is_locked(NULL);
 	  int lsdat=0;
 	  int dat=0;
 	
@@ -315,7 +317,7 @@ void measure_acv(uint32_t ad_dat)
         //Vol*=1.116;
 				
 			  if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"ACV1 Vol=%lld\r\n",Vol);
-			  if(Vol<24000000)//Switch range below 24 V
+			  if(auto_range && Vol<24000000)//Switch range below 24 V
 				{
 						analog_switch(ASW_ACV2);
 						vTaskDelay(pdMS_TO_TICKS(100));
@@ -332,7 +334,7 @@ void measure_acv(uint32_t ad_dat)
         //Vol*=1.116;
 				
 			  if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"ACV2 Vol=%lld\r\n",Vol);
-			  if(Vol<3000000)//Switch range below 8 V
+			  if(auto_range && Vol<3000000)//Switch range below 8 V
 				{
 						analog_switch(ASW_ACV3);
 						vTaskDelay(pdMS_TO_TICKS(100));
@@ -340,7 +342,7 @@ void measure_acv(uint32_t ad_dat)
 						vTaskDelay(pdMS_TO_TICKS(100));
 						MCP3421_ReadReg();
 				}
-				else if(Vol>25000000)//Switch range below 25 V
+				else if(auto_range && Vol>25000000)//Switch range below 25 V
 				{
 						analog_switch(ASW_ACV1);
 						vTaskDelay(pdMS_TO_TICKS(100));
@@ -357,7 +359,7 @@ void measure_acv(uint32_t ad_dat)
         //Vol*=1.116;
 			  
 			  if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"ACV3 Vol=%lld\r\n",Vol);
-			  if(Vol>4000000)//Switch range above 4 V
+			  if(auto_range && Vol>4000000)//Switch range above 4 V
 				{
 						analog_switch(ASW_ACV2);
 						vTaskDelay(pdMS_TO_TICKS(100));
@@ -603,6 +605,7 @@ void measure_aca(uint32_t ad_dat)
 void measure_r(uint32_t ad_dat)
 {
 	  uint64_t Vol;
+	  const bool auto_range = !control_range_is_locked(NULL);
 	  uint64_t r=0;
 	  int lsdat=0;
 	
@@ -654,7 +657,7 @@ void measure_r(uint32_t ad_dat)
 						r*=Slope[5];
 						if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"1M r=%llu\r\n",r);
 					
-					  if(r<200000000)//Switch range below 200 KOhm
+					  if(auto_range && r<200000000)//Switch range below 200 KOhm
 						{
 							  analog_switch(ASW_R3);
 							  vTaskDelay(pdMS_TO_TICKS(100));
@@ -678,7 +681,7 @@ void measure_r(uint32_t ad_dat)
 						r*=Slope[6];
 						if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"100K r=%llu\r\n",r);
 					
-					  if(r<20000000)//Switch range below 20 KOhm
+					  if(auto_range && r<20000000)//Switch range below 20 KOhm
 						{
 							  analog_switch(ASW_R4);
 							  vTaskDelay(pdMS_TO_TICKS(100));
@@ -686,7 +689,7 @@ void measure_r(uint32_t ad_dat)
 								vTaskDelay(pdMS_TO_TICKS(100));
 								MCP3421_ReadReg();
 						}
-						else if(r>250000000)//Switch range above 250 KOhm
+						else if(auto_range && r>250000000)//Switch range above 250 KOhm
 						{
 							  analog_switch(ASW_R2);
 							  vTaskDelay(pdMS_TO_TICKS(100));
@@ -710,7 +713,7 @@ void measure_r(uint32_t ad_dat)
 						r*=Slope[7];
 						if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"10K r=%llu\r\n",r);
 					
-					  if(r<2000000)//Switch range below 2 KOhm
+					  if(auto_range && r<2000000)//Switch range below 2 KOhm
 						{
 							  analog_switch(ASW_R5);
 							  vTaskDelay(pdMS_TO_TICKS(100));
@@ -718,7 +721,7 @@ void measure_r(uint32_t ad_dat)
 								vTaskDelay(pdMS_TO_TICKS(100));
 								MCP3421_ReadReg();
 						}
-						else if(r>25000000)//Switch range above 25 KOhm
+						else if(auto_range && r>25000000)//Switch range above 25 KOhm
 						{
 							  analog_switch(ASW_R3);
 							  vTaskDelay(pdMS_TO_TICKS(100));
@@ -742,7 +745,7 @@ void measure_r(uint32_t ad_dat)
 						r*=Slope[8];
 						if(PRINTF_VALUE) ESP_LOGI(ADC_TASK_TAG,"1K r=%llu\r\n",r);
 					
-					  if(r>2500000)//Switch range above 2.5 KOhm
+					  if(auto_range && r>2500000)//Switch range above 2.5 KOhm
 						{
 							  analog_switch(ASW_R4);
 							  vTaskDelay(pdMS_TO_TICKS(100));
@@ -1229,6 +1232,14 @@ void adc_task(void *arg)
 		}
 	}
 
+	uint8_t locked_range = ASW_OFF;
+	if (control_range_is_locked(&locked_range) && current_sw != locked_range)
+	{
+		analog_switch(locked_range);
+		measurement_invalidate_snapshot();
+		vTaskDelay(pdMS_TO_TICKS(100));
+		continue;
+	}
 
     const uint8_t sample_function = current_fun;
     const uint8_t sample_range = current_sw;

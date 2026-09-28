@@ -6,9 +6,15 @@ const char *SWITCH_FUN = "SWITCH_FUN";
 uint8_t current_fun = 1; // Current function: 01 DC voltage, 02 AC voltage, 03 DC mA, 04 DC A, 05 AC mA, 06 AC A, 07 resistance, 08 continuity, 09 DC power, 0A AC power, 0B diode
 uint8_t current_fun_old=0xFF;
 uint8_t current_sw=0;// Current range state
+static volatile bool range_locked;
+static volatile uint8_t locked_range;
 //Switch the analog multiplexer
 void analog_switch(uint8_t sw)
 {
+	if(range_locked && sw != locked_range)
+	{
+		return;
+	}
 	if(current_sw!=sw)
 	{
 		current_sw=sw;
@@ -143,6 +149,22 @@ void analog_switch(uint8_t sw)
 
 		}
 	}
+}
+
+void switch_range_lock(bool locked, uint8_t range)
+{
+	range_locked = locked;
+	locked_range = locked ? range : ASW_OFF;
+}
+
+bool switch_range_is_locked(uint8_t *range)
+{
+	bool locked = range_locked;
+	if(range != NULL)
+	{
+		*range = locked_range;
+	}
+	return locked;
 }
 
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111820">
-  <title>IOT7 Meter</title>
+  <title>Doer.ee Meter</title>
   <style>
     :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --ink:#eaf0f4; --muted:#8fa0af; --orange:#ffac2e; --panel:#17232e; --line:#30404d; }
     * { box-sizing: border-box; }
@@ -18,10 +18,35 @@
     .brand { display:flex; align-items:center; gap:11px; min-width:0; font-size:19px; font-weight:900; letter-spacing:.09em; }
     .brand-mark { display:grid; place-items:center; width:31px; height:31px; border-radius:9px; background:var(--orange); color:#17202a; font-size:19px; letter-spacing:0; box-shadow:0 0 18px #ffac2e55; }
     .brand small { display:block; color:#a9b8c4; font-size:10px; letter-spacing:.22em; font-weight:650; }
-    .top-state { display:flex; align-items:center; gap:14px; color:#b5c1cb; font-size:12px; font-weight:650; white-space:nowrap; }
+    .top-state { display:flex; align-items:center; gap:12px; color:#b5c1cb; font-size:12px; font-weight:650; white-space:nowrap; }
+    .wifi-summary { display:flex; align-items:center; gap:8px; }
+    .signal-bars { display:inline-flex; align-items:flex-end; gap:2px; height:18px; padding:0 2px; }
+    .signal-bars i { display:block; width:3px; border-radius:2px; background:#4a5b67; }
+    .signal-bars i:nth-child(1) { height:5px; } .signal-bars i:nth-child(2) { height:8px; } .signal-bars i:nth-child(3) { height:12px; } .signal-bars i:nth-child(4) { height:16px; }
+    .signal-bars.level-1 i:nth-child(-n+1), .signal-bars.level-2 i:nth-child(-n+2), .signal-bars.level-3 i:nth-child(-n+3), .signal-bars.level-4 i:nth-child(-n+4) { background:#55d49a; box-shadow:0 0 7px #55d49a66; }
+    .top-tools, .header-actions { position:relative; display:flex; align-items:center; gap:7px; }
+    .header-actions { flex-shrink:0; }
+    .header-button, .icon-button { min-height:32px; border:1px solid #536171; border-radius:9px; background:#1c2a35; color:#d9e4eb; font-size:11px; font-weight:800; }
+    .header-button { padding:6px 11px; }
+    .icon-button { width:34px; padding:4px; font-size:18px; line-height:1; }
+    .header-button:hover, .icon-button:hover { border-color:var(--orange); color:var(--orange); }
+    .settings-menu { position:absolute; z-index:10; top:42px; right:0; width:min(320px,90vw); max-height:calc(100vh - 90px); overflow:auto; padding:15px; border:1px solid #50616e; border-radius:13px; background:#17232e; box-shadow:0 18px 40px #0009; white-space:normal; }
+    .settings-menu[hidden] { display:none; }
+    .settings-title { margin-bottom:12px; color:#f1f5f7; font-size:14px; font-weight:800; }
+    .settings-item { width:100%; margin-bottom:9px; padding:9px 10px; border:1px solid #3d505e; border-radius:8px; background:#20303b; color:#e5edf2; text-align:left; font-size:12px; font-weight:750; }
+    .settings-item:hover { border-color:var(--orange); color:var(--orange); }
+    .settings-row { display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-top:1px solid #30404d; color:#91a5b3; font-size:11px; }
+    .settings-row strong { color:#d9e3e9; font-weight:700; text-align:right; }
+    .settings-note { margin:11px 0 0; color:#788d9c; font-size:10px; line-height:1.45; }
+    .settings-label { display:block; margin:9px 0 4px; color:#a9bbc7; font-size:11px; font-weight:750; }
+    .settings-input { width:100%; min-height:34px; padding:7px 9px; border:1px solid #405260; border-radius:8px; outline:none; background:#0f1b24; color:#eef5f8; font-size:12px; }
+    .settings-input:focus { border-color:var(--orange); }
+    .settings-form .settings-item { margin-top:11px; }
+    .settings-message { min-height:14px; margin:8px 0 0; color:#9ab1c1; font-size:10px; line-height:1.4; }
     .online-dot { display:inline-block; width:8px; height:8px; margin-right:6px; border-radius:50%; background:#d78c48; box-shadow:0 0 0 4px #d78c4822; }
     .online-dot.connected { background:#56d69c; box-shadow:0 0 0 4px #56d69c22; }
     .main { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; overflow:hidden; padding:clamp(12px,2.4vh,34px) clamp(18px,3vw,34px); }
+    .main.hidden { display:none; }
     .eyebrow { color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.19em; text-transform:uppercase; }
     .meter-head { display:flex; align-items:start; justify-content:space-between; gap:14px; }
     h1 { margin:7px 0 0; font-size:clamp(22px,3.2vw,34px); letter-spacing:-.035em; line-height:1.1; }
@@ -37,13 +62,15 @@
     #reading_unit { font-size:clamp(24px,4vw,44px); font-weight:800; letter-spacing:-.04em; }
     .reading-meta { color:#a4b3c0; font-size:13px; font-variant-numeric:tabular-nums; }
     .reading-meta strong { color:#f4f7fa; }
-    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:17px; }
+    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-bottom:17px; }
     .metric { min-height:66px; padding:12px 14px; border:1px solid #30404d; border-radius:12px; background:#1b2833; }
     .metric span { display:block; margin-bottom:7px; color:#8fa2b0; font-size:10px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
     .metric strong { display:block; overflow:hidden; color:#e6edf2; font-size:15px; font-variant-numeric:tabular-nums; text-overflow:ellipsis; white-space:nowrap; }
     .trace { flex:0 0 clamp(86px,13vh,145px); min-height:0; overflow:hidden; padding:12px 17px 9px; border:1px solid #30404d; border-radius:14px; background:#17232d; }
     .trace-head { display:flex; justify-content:space-between; gap:10px; color:#a8b8c3; font-size:11px; font-weight:750; letter-spacing:.1em; text-transform:uppercase; }
-    #trace { display:block; width:100%; height:calc(100% - 25px); min-height:0; margin-top:8px; }
+    .trace-body { position:relative; height:calc(100% - 25px); min-height:0; padding-left:58px; }
+    .trace-scale { position:absolute; left:0; top:8px; bottom:8px; display:flex; flex-direction:column; justify-content:space-between; width:52px; color:#91a5b3; font-size:10px; font-variant-numeric:tabular-nums; line-height:1; text-align:right; }
+    #trace { display:block; width:100%; height:100%; min-height:0; margin-top:8px; }
     .toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:20px 0 13px; }
     .toolbar h2 { margin:0; font-size:16px; letter-spacing:-.015em; }
     .toolbar p { margin:0; color:#8fa2b0; font-size:12px; }
@@ -57,84 +84,156 @@
     .variant-label { margin-right:3px; color:#899ba9; font-size:11px; font-weight:800; letter-spacing:.09em; text-transform:uppercase; }
     .variant { min-height:34px; padding:6px 13px; border:1px solid #3d505e; border-radius:9px; background:#1c2a35; color:#cbd6df; font-size:12px; font-weight:800; }
     .variant.active { border-color:var(--orange); color:var(--orange); background:#ffac2e18; }
+    .range-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-height:39px; padding:3px 2px 1px; }
+    .range-button { min-height:31px; padding:5px 11px; border:1px solid #3d505e; border-radius:8px; background:#1c2a35; color:#cbd6df; font-size:11px; font-weight:800; }
+    .range-button.active { border-color:var(--orange); color:var(--orange); background:#ffac2e18; }
     .actions { display:flex; gap:9px; flex-wrap:wrap; margin-top:19px; padding-top:17px; border-top:1px solid #34434f; }
     .action { min-width:100px; min-height:39px; padding:7px 14px; border:1px solid #52616c; border-radius:9px; background:#25333f; color:#e7eef3; font-size:12px; font-weight:800; transition:transform .15s; }
     .action.active { color:#ffb74f; border-color:#ffb74f; }
     .feedback { min-height:18px; margin:12px 0 0; color:#a7b8c5; font-size:12px; }
     .feedback.error { color:#ff8f8f; }
+    .page { display:flex; flex:1 1 auto; min-height:0; flex-direction:column; overflow:hidden; padding:clamp(18px,3vw,34px); }
+    .page.hidden { display:none; }
+    .page-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+    .page-head h1 { margin:0; }
+    .page-card { display:flex; flex:1 1 auto; min-height:0; align-items:center; justify-content:center; margin-top:22px; border:1px solid #30404d; border-radius:17px; background:radial-gradient(circle at 50% 15%,#253542,#17232e 70%); text-align:center; }
+    .page-placeholder { max-width:390px; padding:24px; }
+    .page-placeholder .page-icon { margin-bottom:12px; color:var(--orange); font-size:46px; }
+    .page-placeholder h2 { margin:0 0 8px; font-size:22px; }
+    .page-placeholder p { margin:0 0 18px; color:#9eafbb; font-size:13px; line-height:1.55; }
     details { margin:15px 0 0; border-top:1px solid #2e3d49; color:#aabac6; }
     summary { padding:16px 2px 3px; cursor:pointer; font-size:12px; font-weight:800; letter-spacing:.06em; }
     .details-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px 18px; padding:15px 2px 3px; }
     .details-grid div { min-width:0; }
     .details-grid span { display:block; margin-bottom:4px; color:#788d9d; font-size:10px; text-transform:uppercase; letter-spacing:.1em; }
     .details-grid strong { display:block; overflow-wrap:anywhere; color:#d8e3eb; font-size:12px; font-weight:650; }
-    @media (max-width:700px) { .shell { margin:0; padding:5px; border-radius:0; } .screen { border-width:3px; border-radius:12px; } .topbar { padding:14px; } .top-state { gap:8px; font-size:10px; } .brand { font-size:15px; } .main { padding:12px 14px 14px; } .reading-panel { min-height:140px; } .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; } .metric { min-height:53px; padding:9px 11px; } .mode-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; } .mode { min-height:57px; } .mode-symbol { font-size:22px; } .details-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-    @media (max-height:900px) { .topbar { padding:10px 18px; } .brand-mark { width:27px; height:27px; } .brand { font-size:16px; } .main { padding:8px 20px 9px; } h1 { font-size:26px; } .reading-panel { flex:1 1 145px; flex-basis:145px; margin-top:8px; margin-bottom:8px; } #reading { font-size:clamp(44px,8vw,82px); } .metrics { gap:7px; margin-bottom:8px; } .metric { min-height:48px; padding:8px 11px; } .trace { flex-basis:80px; padding:8px 12px 6px; } .trace-head { font-size:10px; } .toolbar { margin-top:8px; margin-bottom:5px; } .mode { min-height:53px; } .mode-symbol { font-size:22px; } .variant-row { min-height:35px; padding-top:5px; } .actions { margin-top:8px; padding-top:8px; } .action { min-height:33px; } .feedback { min-height:14px; margin-top:4px; } details { display:none; } }
+    @media (max-width:700px) { .shell { margin:0; padding:5px; border-radius:0; } .screen { border-width:3px; border-radius:12px; } .topbar { padding:14px; } .top-state { gap:8px; font-size:10px; } .brand { font-size:15px; } .main { padding:12px 14px 14px; } .reading-panel { min-height:140px; } .metrics { grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; } .metric { min-height:53px; padding:9px 9px; } .metric strong { font-size:12px; } .mode-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; } .mode { min-height:57px; } .mode-symbol { font-size:22px; } .details-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .header-button { padding-left:8px; padding-right:8px; } .settings-menu { right:-3px; } }
+    @media (max-height:900px) { .topbar { padding:10px 18px; } .brand-mark { width:27px; height:27px; } .brand { font-size:16px; } .main { padding:8px 20px 9px; } h1 { font-size:26px; } .reading-panel { flex:1 1 145px; flex-basis:145px; margin-top:8px; margin-bottom:8px; } #reading { font-size:clamp(44px,8vw,82px); } .metrics { gap:7px; margin-bottom:8px; } .metric { min-height:48px; padding:8px 11px; } .trace { flex-basis:80px; padding:8px 12px 6px; } .trace-head { font-size:10px; } .toolbar { margin-top:8px; margin-bottom:5px; } .mode { min-height:53px; } .mode-symbol { font-size:22px; } .variant-row { min-height:35px; padding-top:5px; } .range-row { min-height:33px; } .range-button { min-height:28px; padding:4px 9px; } .actions { margin-top:8px; padding-top:8px; } .action { min-height:33px; } .feedback { min-height:14px; margin-top:4px; } details { display:none; } }
     @media (max-height:760px) { .topbar { padding-top:10px; padding-bottom:10px; } .main { padding-top:8px; padding-bottom:9px; } .reading-panel { min-height:120px; margin-top:8px; margin-bottom:8px; } .metrics { margin-bottom:8px; } .metric { min-height:50px; padding:8px 11px; } .trace { flex-basis:82px; } .toolbar { margin-top:10px; margin-bottom:7px; } .mode { min-height:54px; } .variant-row { min-height:39px; padding-top:6px; } .actions { margin-top:9px; padding-top:9px; } .feedback { margin-top:5px; } details { margin-top:7px; } }
     @media (max-width:380px) { .top-state #ssid { display:none; } #reading { font-size:50px; } #reading.compact { font-size:39px; } .reading-line { gap:7px; } }
+    @media (max-width:500px) { .wifi-summary #connection { display:none; } .top-state #ssid { max-width:88px; overflow:hidden; text-overflow:ellipsis; } .topbar { gap:6px; padding:9px; } .top-state { gap:5px; } .brand { gap:5px; font-size:12px; letter-spacing:.02em; } .brand small { font-size:7px; letter-spacing:.12em; } .brand-mark { width:24px; height:24px; font-size:15px; } .main { padding:7px 9px; } .meter-head { align-items:center; gap:6px; } .meter-head h1 { font-size:19px; } .header-actions { gap:3px; } .range-pill { padding:6px; font-size:9px; } .header-button { padding:5px 6px; font-size:9px; } .trace-body { padding-left:49px; } .trace-scale { width:44px; font-size:9px; } .variant-row,.range-row { gap:4px; } .variant,.range-button { min-height:26px; padding:4px 6px; font-size:10px; } .actions { gap:5px; } .action { min-width:0; flex:1; padding:5px; font-size:10px; } }
+    @media (max-width:700px) and (max-height:760px) { .reading-panel { flex-basis:85px; min-height:85px; margin:5px 0; } #reading { font-size:clamp(38px,11vw,65px); } #reading.compact { font-size:clamp(32px,9vw,55px); } .metrics { margin-bottom:5px; } .metric { min-height:35px; padding:4px 7px; } .metric span { margin-bottom:2px; font-size:8px; } .metric strong { font-size:10px; } .trace { flex-basis:58px; padding:5px 7px; } .trace-body { height:calc(100% - 14px); } .toolbar { margin:4px 0; } .toolbar h2 { font-size:12px; } .toolbar p { font-size:9px; } .mode { min-height:38px; padding:3px; gap:1px; } .mode-symbol { font-size:18px; } .mode-label { font-size:9px; } .variant-row,.range-row { min-height:0; padding:3px 0; } .actions { margin-top:4px; padding-top:4px; } .action { min-height:26px; } .feedback { margin-top:2px; font-size:9px; } }
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { transition:none!important; } }
   </style>
 </head>
 <body>
   <div class="shell"><div class="screen">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark">7</span><span>IOT7<small>STANDALONE METER</small></span></div>
-      <div class="top-state"><span><i id="online_dot" class="online-dot"></i><span id="connection">Connecting</span></span><span id="ssid"></span><span id="rssi">-- dBm</span></div>
+      <div class="brand"><span class="brand-mark">D</span><span>Doer.ee<small>STANDALONE METER</small></span></div>
+      <div class="top-state"><span class="wifi-summary"><i id="online_dot" class="online-dot"></i><span id="connection">Connecting</span></span><span id="ssid"></span><span id="wifi_bars" class="signal-bars level-0" aria-label="Wi-Fi signal"><i></i><i></i><i></i><i></i></span><div class="top-tools"><button id="settings_button" class="icon-button" type="button" aria-label="Open settings" aria-expanded="false">⚙</button><div id="settings_menu" class="settings-menu" hidden><div class="settings-title">Settings</div><form id="wifi_form" class="settings-form"><label class="settings-label" for="wifi_ssid">Wi-Fi SSID</label><input id="wifi_ssid" class="settings-input" maxlength="31" required autocomplete="off"><label class="settings-label" for="wifi_password">New Wi-Fi password</label><input id="wifi_password" class="settings-input" type="password" maxlength="63" autocomplete="new-password" placeholder="Blank keeps current password"><button class="settings-item" type="submit">Save Wi-Fi and reconnect</button></form><form id="mdns_form" class="settings-form"><label class="settings-label" for="mdns_name">mDNS hostname</label><input id="mdns_name" class="settings-input" maxlength="63" pattern="[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9]" placeholder="doer-meter" required><button class="settings-item" type="submit">Save hostname</button></form><div class="settings-row"><span>Browser polling</span><strong>1 second</strong></div><div class="settings-row"><span>Chart window</span><strong>60 samples</strong></div><div class="settings-row"><span>Display units</span><strong>Auto scale</strong></div><p id="settings_message" class="settings-message" role="status">Wi-Fi changes may disconnect this page. A blank password keeps the current password for the same SSID; for a different SSID it selects an open network.</p></div></div></div>
     </header>
-    <main class="main">
-      <div class="meter-head"><div><div class="eyebrow">Live measurement</div><h1 id="function_name">Waiting for meter</h1></div><span id="range" class="range-pill">Range --</span></div>
+    <main id="main_dashboard" class="main">
+      <div class="meter-head"><div><div class="eyebrow">Live measurement</div><h1 id="function_name">Waiting for meter</h1></div><div class="header-actions"><span id="range" class="range-pill">Range --</span><button id="collect_button" class="header-button" type="button">Collect Data</button></div></div>
       <section class="reading-panel" aria-live="polite"><div id="reading_state" class="read-state warn">Waiting for sample</div><div class="reading-line"><span id="reading">--</span><span id="reading_unit"></span></div><div class="reading-meta"><strong id="signal_type">DC</strong> <span id="reading_hint">Select a function below</span></div></section>
-      <div class="metrics"><div class="metric"><span>Battery</span><strong id="battery">--</strong></div><div class="metric"><span>Wi-Fi signal</span><strong id="signal">--</strong></div><div class="metric"><span>Sample age</span><strong id="sample_age">--</strong></div><div class="metric"><span>Sample interval</span><strong id="interval">--</strong></div></div>
-      <section class="trace"><div class="trace-head"><span>Live trace</span><span id="trace_count">Waiting for data</span></div><canvas id="trace" aria-label="Recent measurement trend"></canvas></section>
+      <div class="metrics"><div class="metric"><span>Battery</span><strong id="battery">--</strong></div><div class="metric"><span>Sample age</span><strong id="sample_age">--</strong></div><div class="metric"><span>Sample interval</span><strong id="interval">--</strong></div></div>
+      <section class="trace"><div class="trace-head"><span>Live trace</span><span id="trace_count">Waiting for data</span></div><div class="trace-body"><div class="trace-scale"><span id="trace_max">--</span><span id="trace_min">--</span></div><canvas id="trace" aria-label="Recent measurement trend"></canvas></div></section>
       <div class="toolbar"><h2>Measurement mode</h2><p id="control_state">Loading controls</p></div>
       <nav class="mode-grid" aria-label="Measurement function"><button class="mode" data-group="voltage" type="button"><span class="mode-symbol">V</span><span class="mode-label">Voltage</span></button><button class="mode" data-group="current" type="button"><span class="mode-symbol">A</span><span class="mode-label">Current</span></button><button class="mode" data-group="resistance" type="button"><span class="mode-symbol">Ω</span><span class="mode-label">Resistance</span></button><button class="mode" data-group="continuity" type="button"><span class="mode-symbol">⌁</span><span class="mode-label">Continuity</span></button><button class="mode" data-group="diode" type="button"><span class="mode-symbol">▷│</span><span class="mode-label">Diode</span></button><button class="mode" data-group="power" type="button"><span class="mode-symbol">W</span><span class="mode-label">Power</span></button></nav>
-      <div id="variant_row" class="variant-row" aria-label="Function variants"></div>
+      <div id="variant_row" class="variant-row" aria-label="Function variants"></div><div id="range_row" class="range-row" aria-label="Measurement range"></div>
       <div class="actions"><button id="hold_button" class="action" type="button">Hold</button><button id="mark_button" class="action" type="button">Mark reading</button><button id="zero_button" class="action" type="button">Zero</button></div>
       <p id="feedback" class="feedback" role="status">Updates every second.</p>
       <details><summary>Device details</summary><div class="details-grid"><div><span>Device ID</span><strong id="device">--</strong></div><div><span>Firmware</span><strong id="firmware">--</strong></div><div><span>IP address</span><strong id="ip">--</strong></div><div><span>MAC address</span><strong id="mac">--</strong></div><div><span>Channel</span><strong id="channel">--</strong></div><div><span>Free memory</span><strong id="heap">--</strong></div><div><span>Uptime</span><strong id="uptime">--</strong></div><div><span>Raw sample</span><strong id="raw">--</strong></div><div><span>Sample sequence</span><strong id="sequence">--</strong></div></div></details>
     </main>
+    <main id="data_page" class="page hidden"><div class="page-head"><div><div class="eyebrow">Measurement tools</div><h1>Data collection</h1></div><button id="back_button" class="action" type="button">Back</button></div><section class="page-card"><div class="page-placeholder"><div class="page-icon">▦</div><h2>Data collection</h2><p>This page is ready for the recording workflow. Local history, markers, statistics and CSV export will be added here.</p><button id="back_button_bottom" class="action" type="button">Back to meter</button></div></section></main>
   </div></div>
   <script>
     const el = id => document.getElementById(id);
-    const modes = {voltage:[[1,'DC'],[2,'AC']],current:[[3,'DC mA'],[4,'DC A'],[5,'AC mA'],[6,'AC A']],resistance:[[7,'Resistance']],continuity:[[8,'Continuity']],diode:[[11,'Diode']],power:[[9,'DC'],[10,'AC']]};
-    const groupFor = id => Object.keys(modes).find(group => modes[group].some(entry => entry[0] === id)) || 'voltage';
+    const modes = {voltage:[[1,'DC'],[2,'AC']],current:[[3,'DC'],[5,'AC']],resistance:[[7,'Resistance']],continuity:[[8,'Continuity']],diode:[[11,'Diode']],power:[[9,'DC'],[10,'AC']]};
+    const groupFor = id => [3,4,5,6].includes(id) ? 'current' : Object.keys(modes).find(group => modes[group].some(entry => entry[0] === id)) || 'voltage';
     const preferred = {voltage:1,current:3,resistance:7,continuity:8,diode:11,power:9};
-    let activeFunction = 1, requestedFunction = null, functionPending = false, holdEnabled = false, lastSequence = 0, lastTimestamp = 0, traceMode = '', tracePoints = [];
-    function setText(id, value) { el(id).textContent = value == null || value === '' ? '--' : String(value); }
+    const rangeOptions = {voltage:['Auto','1000 V','100 V','10 V'],current:['Auto','250 mA','2.5 A'],resistance:['Auto','1 MΩ','100 kΩ','10 kΩ','1 kΩ'],continuity:['Auto'],diode:['Auto'],power:['Auto']};
+    let activeFunction = 1, requestedFunction = null, functionPending = false, rangePending = false, holdEnabled = false, lastSequence = 0, lastTimestamp = 0, traceMode = '', tracePoints = [], traceBaseUnit = '', rangeSelection = 'Auto';
+    function setText(id, value) { el(id).textContent = value == null ? '--' : String(value); }
     async function getJson(url) { const response = await fetch(url, {cache:'no-store'}); if (!response.ok) throw Error('HTTP '+response.status); return response.json(); }
     async function post(url, body) { const response = await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body || ''}); const result = await response.json(); if (!response.ok) throw Error(result.error || 'HTTP '+response.status); return result; }
     function feedback(message, error) { setText('feedback',message); el('feedback').classList.toggle('error',!!error); }
     function batteryText(value) { if (value === 254) return 'Charging'; if (value === 255) return 'Normal'; if (value === 0) return 'Low'; return value >= 1 && value <= 100 ? value+'%' : 'Unknown'; }
     function signalText(rssi) { return rssi >= -50 ? 'Excellent' : rssi >= -65 ? 'Good' : rssi >= -75 ? 'Fair' : 'Weak'; }
+    const unitBase = {uV:['V',1e-6],mV:['V',1e-3],uA:['A',1e-6],mOhm:['Ω',1e-3],Ohm:['Ω',1],uW:['W',1e-6]};
+    function formatBase(value, base) {
+      const size=Math.abs(value);
+      let scaled=value, unit=base;
+      if (base === 'Ω' && size >= 1e6) { scaled=value/1e6; unit='MΩ'; }
+      else if (base === 'Ω' && size >= 1e3) { scaled=value/1e3; unit='kΩ'; }
+      else if (size < 1e-3) { scaled=value*1e6; unit='u'+base; }
+      else if (size < 1) { scaled=value*1e3; unit=base === 'Ω' ? 'mΩ' : 'm'+base; }
+      let number=Number(scaled).toFixed(3);
+      if (number === '-0.000') number='0.000';
+      return {number,unit};
+    }
     function formatReading(m) {
-      const signed = m.sign ? -m.value_raw : m.value_raw;
-      let value = signed, unit = m.unit || '';
-      if (unit === 'uV') { value = signed / 1000000; unit = 'V'; }
-      else if (unit === 'mV') { value = signed / 1000; unit = 'V'; }
-      else if (unit === 'uA') { value = Math.abs(signed) >= 1000000 ? signed / 1000000 : signed / 1000; unit = Math.abs(signed) >= 1000000 ? 'A' : 'mA'; }
-      else if (unit === 'mOhm') { value = signed / 1000; unit = 'Ω'; }
-      else if (unit === 'Ohm') { value = Math.abs(signed) >= 1000 ? signed / 1000 : signed; unit = Math.abs(signed) >= 1000 ? 'kΩ' : 'Ω'; }
-      else if (unit === 'uW') { value = signed / 1000000; unit = 'W'; }
-      let digits = unit === 'V' || unit === 'W' ? 6 : unit === 'mA' || unit === 'Ω' || unit === 'kΩ' ? 3 : 4;
-      let number = Number(value).toFixed(digits).replace(/\.?0+$/,'');
-      if (number === '-0') number = '0';
-      return {number,unit,value};
+      const source=unitBase[m.unit];
+      if (!source) return {number:'--',unit:'',value:0,base:''};
+      const value=(m.sign ? -m.value_raw : m.value_raw)*source[1];
+      return {...formatBase(value,source[0]),value,base:source[0]};
     }
     function signalType(id) { return [2,5,6,10].includes(id) ? 'AC' : [1,3,4,9].includes(id) ? 'DC' : 'AUTO RANGE'; }
+    function rangeOptionsFor(functionId) {
+      const group = groupFor(functionId);
+      if (group === 'current') return ['Auto','250 mA','2.5 A'];
+      return rangeOptions[group];
+    }
+    function rangeCode(functionId, option) {
+      if (option === 'Auto') return 0;
+      if ([1,2].includes(functionId)) return ({'1000 V':functionId === 1 ? 2 : 8, '100 V':functionId === 1 ? 3 : 9, '10 V':functionId === 1 ? 4 : 10})[option];
+      if ([3,4,5,6].includes(functionId)) return ({3:13,4:14,5:15,6:16})[functionId];
+      if (functionId === 7) return ({'1 MΩ':19,'100 kΩ':20,'10 kΩ':21,'1 kΩ':22})[option];
+      return null;
+    }
+    function rangeOptionForCode(functionId, code) {
+      const options = rangeOptionsFor(functionId);
+      return options.find(option => rangeCode(functionId, option) === code) || 'Auto';
+    }
+    function renderRanges(group, pending, functionId=activeFunction) {
+      const row = el('range_row'); row.replaceChildren();
+      const label = document.createElement('span'); label.className='variant-label'; label.textContent='Range'; row.appendChild(label);
+      rangeOptionsFor(functionId).forEach(option => { const button=document.createElement('button'); button.type='button'; button.className='range-button'+(rangeSelection===option?' active':''); button.textContent=option; button.disabled=pending; button.addEventListener('click',()=>selectRange(option)); row.appendChild(button); });
+    }
+    async function selectRange(option) {
+      if (functionPending || rangePending) return;
+      if (groupFor(activeFunction) === 'current') {
+        if (option === 'Auto') {
+          rangeSelection='Auto'; rangePending=true; renderRanges(groupFor(activeFunction),true,activeFunction); feedback('Returning to automatic current range…');
+          try { await post('/api/control/range','range=auto'); } catch (error) { rangePending=false; feedback('Range change failed: '+error.message,true); }
+          return;
+        }
+        const ac=[5,6].includes(activeFunction);
+        const target=option === '250 mA' ? (ac ? 5 : 3) : (ac ? 6 : 4);
+        if (target !== activeFunction) { await chooseFunction(target); return; }
+        const code=rangeCode(activeFunction,option); rangeSelection=option; rangePending=true; renderRanges(groupFor(activeFunction),true,activeFunction); feedback('Selecting '+option+'…');
+        try { await post('/api/control/range','range='+encodeURIComponent(code)); } catch (error) { rangePending=false; feedback('Range change failed: '+error.message,true); }
+        return;
+      }
+      const code = rangeCode(activeFunction, option);
+      if (code === null || code === undefined) { feedback('This range is not available for the selected function.',true); return; }
+      rangeSelection=option; rangePending=true; renderRanges(groupFor(activeFunction),true,activeFunction); feedback(option === 'Auto' ? 'Returning to automatic range…' : 'Selecting '+option+'…');
+      try { await post('/api/control/range','range='+(code === 0 ? 'auto' : encodeURIComponent(code))); }
+      catch (error) { rangePending=false; rangeSelection='Auto'; renderRanges(groupFor(activeFunction),functionPending,activeFunction); feedback('Range change failed: '+error.message,true); }
+    }
     function renderModes(id, pending) {
       const group = groupFor(id); preferred[group] = id;
       document.querySelectorAll('.mode').forEach(button => { button.classList.toggle('active',button.dataset.group === group); button.disabled = pending; button.setAttribute('aria-pressed',button.dataset.group === group ? 'true' : 'false'); });
       const row = el('variant_row'); row.replaceChildren();
       if (modes[group].length > 1) {
-        const label = document.createElement('span'); label.className = 'variant-label'; label.textContent = group === 'current' ? 'Range / signal' : 'Signal'; row.appendChild(label);
-        modes[group].forEach(([functionId,name]) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'variant'+(functionId === id ? ' active' : ''); button.textContent = name; button.disabled = pending; button.setAttribute('aria-pressed',functionId === id ? 'true' : 'false'); button.addEventListener('click',() => chooseFunction(functionId)); row.appendChild(button); });
+        const label = document.createElement('span'); label.className = 'variant-label'; label.textContent = 'Signal'; row.appendChild(label);
+        modes[group].forEach(([functionId,name]) => { const targetId=group === 'current' && [4,6].includes(id) ? functionId+1 : functionId; const selected=group === 'current' ? ([3,4].includes(id) ? name === 'DC' : name === 'AC') : functionId === id; const button = document.createElement('button'); button.type = 'button'; button.className = 'variant'+(selected ? ' active' : ''); button.textContent = name; button.disabled = pending; button.setAttribute('aria-pressed',selected ? 'true' : 'false'); button.addEventListener('click',() => chooseFunction(targetId)); row.appendChild(button); });
       }
+      renderRanges(group,pending || rangePending,id);
     }
-    async function chooseFunction(id) { if (functionPending || id === activeFunction) return; requestedFunction = id; functionPending = true; renderModes(id,true); setText('control_state','Changing mode'); feedback('Changing measurement mode…'); try { await post('/api/control/function','function_id='+encodeURIComponent(id)); } catch (error) { requestedFunction = null; functionPending = false; renderModes(activeFunction,false); feedback('Mode change failed: '+error.message,true); } }
+    async function chooseFunction(id) { if (functionPending || rangePending || id === activeFunction) return; requestedFunction = id; rangeSelection='Auto'; functionPending = true; renderModes(id,true); setText('control_state','Changing mode'); feedback('Changing measurement mode…'); try { await post('/api/control/function','function_id='+encodeURIComponent(id)); } catch (error) { requestedFunction = null; functionPending = false; renderModes(activeFunction,false); feedback('Mode change failed: '+error.message,true); } }
     document.querySelectorAll('.mode').forEach(button => button.addEventListener('click',() => chooseFunction(preferred[button.dataset.group])));
     el('hold_button').addEventListener('click', async () => { try { await post('/api/control/hold','enabled='+(holdEnabled ? '0':'1')); feedback(holdEnabled ? 'Releasing hold…' : 'Holding reading…'); } catch (error) { feedback('Hold failed: '+error.message,true); } });
     el('mark_button').addEventListener('click', async () => { try { await post('/api/control/mark',''); feedback('Current reading marked.'); } catch (error) { feedback('Mark failed: '+error.message,true); } });
     el('zero_button').addEventListener('click', async () => { if (!confirm('Disconnect external input before zeroing. Continue?')) return; try { await post('/api/control/zero',''); feedback('Zero request accepted.'); } catch (error) { feedback('Zero failed: '+error.message,true); } });
+    function showDataPage(show) { el('main_dashboard').classList.toggle('hidden',show); el('data_page').classList.toggle('hidden',!show); }
+    el('collect_button').addEventListener('click',()=>showDataPage(true));
+    el('back_button').addEventListener('click',()=>showDataPage(false));
+    el('back_button_bottom').addEventListener('click',()=>showDataPage(false));
+    el('settings_button').addEventListener('click',event => { event.stopPropagation(); const menu=el('settings_menu'); const open=menu.hidden; menu.hidden=!open; el('settings_button').setAttribute('aria-expanded',open?'true':'false'); });
+    function settingsMessage(message, error) { setText('settings_message',message); el('settings_message').classList.toggle('error',!!error); }
+    el('wifi_form').addEventListener('submit',async event => { event.preventDefault(); const ssid=el('wifi_ssid').value.trim(); const password=el('wifi_password').value; if (!ssid) return; settingsMessage('Saving Wi-Fi credentials…'); try { await post('/api/settings/wifi','ssid='+encodeURIComponent(ssid)+'&password='+encodeURIComponent(password)); el('wifi_password').value=''; settingsMessage('Saved. The device is reconnecting; reload this page after it receives an IP.'); } catch (error) { settingsMessage('Wi-Fi save failed: '+error.message,true); } });
+    el('mdns_form').addEventListener('submit',async event => { event.preventDefault(); const hostname=el('mdns_name').value.trim().toLowerCase(); if (!hostname) return; settingsMessage('Saving hostname…'); try { await post('/api/settings/mdns','hostname='+encodeURIComponent(hostname)); settingsMessage('Hostname saved as '+hostname+'.local'); } catch (error) { settingsMessage('Hostname save failed: '+error.message,true); } });
+    document.addEventListener('click',event => { if (!event.target.closest('.top-tools')) { el('settings_menu').hidden=true; el('settings_button').setAttribute('aria-expanded','false'); } });
     function drawTrace() {
       const canvas = el('trace'), ratio = window.devicePixelRatio || 1, width = canvas.clientWidth, height = canvas.clientHeight;
       if (!width || !height) return;
@@ -143,10 +242,20 @@
       ctx.strokeStyle = '#30414e'; ctx.lineWidth = 1;
       for (let i=0;i<=4;i++) { const y=7+i*(height-14)/4; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(width,y); ctx.stroke(); }
       for (let i=0;i<=8;i++) { const x=i*width/8; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,height); ctx.stroke(); }
-      if (tracePoints.length < 2) return;
-      let min=Math.min(...tracePoints), max=Math.max(...tracePoints), span=max-min || Math.max(Math.abs(max)*.02,.001); min-=span*.12; max+=span*.12;
-      ctx.beginPath(); tracePoints.forEach((point,index) => { const x=index*width/59, y=height-8-(point-min)/(max-min)*(height-16); if (index) ctx.lineTo(x,y); else ctx.moveTo(x,y); });
-      ctx.strokeStyle='#ffad36'; ctx.lineWidth=2.2; ctx.shadowColor='#ffad36'; ctx.shadowBlur=9; ctx.stroke();
+      const finite = tracePoints.filter(point => Number.isFinite(point));
+      const hasOverrange = tracePoints.some(point => point === null);
+      if (!finite.length && !hasOverrange) { setText('trace_max','--'); setText('trace_min','--'); return; }
+      let min=finite.length ? Math.min(...finite) : 0, max=finite.length ? Math.max(...finite) : 1;
+      let span=max-min || Math.max(Math.abs(max)*.02,.001); min-=span*.12; max+=span*.12;
+      const scaleText = value => { const formatted=formatBase(value,traceBaseUnit); return formatted.number+' '+formatted.unit; };
+      setText('trace_max',hasOverrange ? 'OL' : scaleText(max));
+      setText('trace_min',finite.length ? scaleText(min) : '--');
+      const xAt = index => index * width / Math.max(tracePoints.length-1,1);
+      const yAt = point => height-8-(point-min)/(max-min)*(height-16);
+      ctx.strokeStyle='#ffad36'; ctx.lineWidth=2.2; ctx.shadowColor='#ffad36'; ctx.shadowBlur=9;
+      let pathOpen=false;
+      tracePoints.forEach((point,index) => { if (point === null) { if (pathOpen) ctx.stroke(); pathOpen=false; const x=xAt(index); ctx.beginPath(); ctx.arc(x,7,3.5,0,Math.PI*2); ctx.fillStyle='#ffad36'; ctx.fill(); return; } const x=xAt(index), y=yAt(point); if (!pathOpen) { ctx.beginPath(); ctx.moveTo(x,y); pathOpen=true; } else ctx.lineTo(x,y); });
+      if (pathOpen) ctx.stroke();
     }
     window.addEventListener('resize',drawTrace);
     async function refreshMeasurement() {
@@ -163,20 +272,29 @@
         else if (m.overrange) { state='Overrange'; className+=' warn'; }
         else if (!m.valid) { state='Invalid reading'; className+=' error'; }
         setText('reading_state',state); el('reading_state').className=className;
-        if (m.overrange || !m.valid) { setText('reading',m.overrange ? 'OL' : '--'); setText('reading_unit',''); setText('reading_hint',m.overrange ? 'Input exceeds this range' : 'No valid value'); return; }
-        const formatted = formatReading(m); setText('reading',formatted.number); setText('reading_unit',formatted.unit); el('reading').classList.toggle('compact',formatted.number.length > 7); setText('reading_hint',m.hold ? 'Display frozen' : 'Auto range · live');
-        const mode=m.function_id+':'+formatted.unit;
-        if (traceMode !== mode) { traceMode=mode; tracePoints=[]; }
+        if (m.overrange || !m.valid) {
+          const openCircuit=m.overrange && [7,8].includes(m.function_id);
+          setText('reading',m.overrange ? 'OL' : '--'); setText('reading_unit',openCircuit ? '∞' : ''); setText('reading_hint',openCircuit ? 'Infinity / open circuit' : m.overrange ? 'Input exceeds selected range' : 'No valid value');
+          if (m.overrange) {
+            const mode=String(m.function_id); if (traceMode !== mode) { traceMode=mode; traceBaseUnit=unitBase[m.unit]?.[0] || ([7,8].includes(m.function_id) ? 'Ω' : 'V'); tracePoints=[]; }
+            if (!m.hold && m.sample_age_ms <= 5000 && (tracePoints.length === 0 || m.sample_sequence !== Number(el('trace').dataset.sequence))) { tracePoints.push(null); if (tracePoints.length > 60) tracePoints.shift(); el('trace').dataset.sequence=m.sample_sequence; setText('trace_count',tracePoints.length+' recent samples'); drawTrace(); }
+          }
+          return;
+        }
+        const formatted = formatReading(m); setText('reading',formatted.number); setText('reading_unit',formatted.unit); el('reading').classList.toggle('compact',formatted.number.length > 7); setText('reading_hint',m.hold ? 'Display frozen' : rangeSelection === 'Auto' ? 'Auto range · live' : rangeSelection+' · live');
+        const mode=String(m.function_id);
+        if (traceMode !== mode) { traceMode=mode; traceBaseUnit=formatted.base; tracePoints=[]; }
         if (!m.hold && m.sample_age_ms <= 5000 && (tracePoints.length === 0 || m.sample_sequence !== Number(el('trace').dataset.sequence))) { tracePoints.push(formatted.value); if (tracePoints.length > 60) tracePoints.shift(); el('trace').dataset.sequence=m.sample_sequence; setText('trace_count',tracePoints.length+' recent samples'); drawTrace(); }
       } catch (error) { setText('reading_state','Connection lost'); el('reading_state').className='read-state error'; feedback('Could not read measurement: '+error.message,true); }
     }
     async function refreshControl() {
-      try { const c=await getJson('/api/control'); activeFunction=c.function_id; if (requestedFunction !== null && !c.function_pending && c.function_id === requestedFunction) requestedFunction=null; functionPending=!!c.function_pending || requestedFunction !== null; renderModes(requestedFunction || activeFunction,functionPending); holdEnabled=!!c.hold; el('hold_button').classList.toggle('active',holdEnabled); setText('hold_button',holdEnabled ? 'Release hold' : 'Hold'); el('zero_button').disabled=!!c.zero_pending; el('mark_button').disabled=!c.sample_available; setText('control_state',c.function_pending ? 'Changing mode' : c.zero_pending ? 'Zeroing' : c.last_command_ok ? 'Ready' : 'Command error'); } catch (error) { setText('control_state','Offline'); }
+      try { const c=await getJson('/api/control'); activeFunction=c.function_id; if (requestedFunction !== null && !c.function_pending && c.function_id === requestedFunction) requestedFunction=null; functionPending=!!c.function_pending || requestedFunction !== null; rangePending=!!c.range_pending; rangeSelection=groupFor(activeFunction) === 'current' ? (c.range_auto ? 'Auto' : ([3,5].includes(activeFunction) ? '250 mA' : '2.5 A')) : c.range_auto ? 'Auto' : rangeOptionForCode(requestedFunction || activeFunction,c.range); renderModes(requestedFunction || activeFunction,functionPending || rangePending); holdEnabled=!!c.hold; el('hold_button').classList.toggle('active',holdEnabled); setText('hold_button',holdEnabled ? 'Release hold' : 'Hold'); el('zero_button').disabled=!!c.zero_pending; el('mark_button').disabled=!c.sample_available; setText('control_state',c.function_pending ? 'Changing mode' : c.range_pending ? 'Changing range' : c.zero_pending ? 'Zeroing' : c.last_command_ok ? 'Ready' : 'Command error'); } catch (error) { setText('control_state','Offline'); }
     }
     async function refreshStatus() {
-      try { const s=await getJson('/api/status'); const connected=!!s.connected; setText('connection',connected ? 'Connected' : 'Offline'); el('online_dot').classList.toggle('connected',connected); setText('ssid',connected ? s.ssid : ''); setText('rssi',connected ? s.rssi+' dBm' : '-- dBm'); setText('signal',connected ? signalText(s.rssi)+' · '+s.rssi+' dBm' : 'Disconnected'); setText('device',s.device_id); setText('firmware',s.firmware); setText('ip',s.ip); setText('mac',s.mac); setText('channel',s.channel); setText('heap',Math.round(s.heap_free/1024)+' KiB'); setText('uptime',Math.floor(s.uptime_s/60)+' min'); } catch (error) { setText('connection','Offline'); el('online_dot').classList.remove('connected'); setText('signal','Disconnected'); }
+      try { const s=await getJson('/api/status'); const connected=!!s.connected; setText('connection',connected ? 'Connected' : 'Offline'); el('online_dot').classList.toggle('connected',connected); setText('ssid',connected ? s.ssid : ''); const level=!connected ? 0 : s.rssi >= -55 ? 4 : s.rssi >= -67 ? 3 : s.rssi >= -78 ? 2 : 1; const bars=el('wifi_bars'); bars.className='signal-bars level-'+level; bars.setAttribute('aria-label',connected ? 'Wi-Fi signal '+signalText(s.rssi) : 'Wi-Fi disconnected'); setText('device',s.device_id); setText('firmware',s.firmware); setText('ip',s.ip); setText('mac',s.mac); setText('channel',s.channel); setText('heap',Math.round(s.heap_free/1024)+' KiB'); setText('uptime',Math.floor(s.uptime_s/60)+' min'); } catch (error) { setText('connection','Offline'); el('online_dot').classList.remove('connected'); el('wifi_bars').className='signal-bars level-0'; setText('ssid',''); }
     }
-    renderModes(activeFunction,false); drawTrace(); refreshMeasurement(); refreshControl(); refreshStatus(); setInterval(refreshMeasurement,1000); setInterval(refreshControl,1000); setInterval(refreshStatus,3000);
+    async function refreshSettings() { try { const s=await getJson('/api/settings'); if (document.activeElement !== el('mdns_name')) el('mdns_name').value=s.mdns_hostname || 'doer-meter'; if (document.activeElement !== el('wifi_ssid') && s.ssid) el('wifi_ssid').value=s.ssid; } catch (error) {} }
+    renderModes(activeFunction,false); drawTrace(); refreshMeasurement(); refreshControl(); refreshStatus(); refreshSettings(); setInterval(refreshMeasurement,1000); setInterval(refreshControl,1000); setInterval(refreshStatus,3000); setInterval(refreshSettings,5000);
   </script>
 </body>
 </html>

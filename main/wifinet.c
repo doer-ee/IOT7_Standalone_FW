@@ -3,6 +3,7 @@
 #include "wifinet.h"
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
+#include "mdns.h"
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -20,6 +21,9 @@ static uint8_t time_state=0;
 
 static char wifi_ssid[32];
 static char wifi_pass[64];
+static char mdns_hostname[64] = "doer-meter";
+static bool mdns_started = false;
+static bool wifi_reconfiguring = false;
 
 #define CONFIG_AP_PASSWORD "iot7setup"
 #define CONFIG_AP_CHANNEL  6
@@ -30,6 +34,7 @@ static httpd_handle_t status_httpd = NULL;
 static bool wifi_stack_ready = false;
 static bool wifi_started = false;
 static bool config_apply_started = false;
+static bool wifi_apply_from_web = false;
 static unsigned int wifi_connect_attempts = 0;
 static unsigned int wifi_disconnect_count = 0;
 
@@ -45,6 +50,9 @@ static esp_err_t control_function_post_handler(httpd_req_t *req);
 static esp_err_t control_hold_post_handler(httpd_req_t *req);
 static esp_err_t control_zero_post_handler(httpd_req_t *req);
 static esp_err_t control_mark_post_handler(httpd_req_t *req);
+static esp_err_t settings_api_get_handler(httpd_req_t *req);
+static esp_err_t settings_wifi_post_handler(httpd_req_t *req);
+static esp_err_t settings_mdns_post_handler(httpd_req_t *req);
 static void status_httpd_start(void);
 static void status_httpd_stop(void);
 static void wifi_apply_task(void *arg);
@@ -145,6 +153,18 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
             // Once DHCP completes, expose the local measurement and control UI.
             status_httpd_start();
 
+            if (!mdns_started) {
+                esp_err_t mdns_err = mdns_init();
+                if (mdns_err == ESP_OK) {
+                    mdns_started = true;
+                    mdns_hostname_set(mdns_hostname);
+                    mdns_instance_name_set("Doer.ee Meter");
+                    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+                } else {
+                    ESP_LOGW(WIFINET, "mDNS init failed: %s", esp_err_to_name(mdns_err));
+                }
+            }
+
             if(time_state==0) esp_initialize_sntp();
             break;
         case SYSTEM_EVENT_STA_DISCONNECTED:
@@ -159,7 +179,9 @@ static esp_err_t event_handler2(void *ctx, system_event_t *event)
 
             /* This is a workaround as ESP32 WiFi libs don't currently
                auto-reassociate. */
-            wifi_connect_with_log("STA_DISCONNECTED");
+            if (!wifi_reconfiguring) {
+                wifi_connect_with_log("STA_DISCONNECTED");
+            }
            net_state=0;
             break;
         default:
@@ -204,7 +226,7 @@ static int hex_value(char c)
 
 static bool form_get_value(const char *body, const char *key, char *out, size_t out_size)
 {
-    char copy[256];
+    char copy[512];
     size_t key_len = strlen(key);
     if (out_size == 0 || strlen(body) >= sizeof(copy)) {
         return false;
@@ -551,7 +573,7 @@ static esp_err_t control_api_get_handler(httpd_req_t *req)
                           "{\"function_id\":%u,\"function\":\"%s\","
                           "\"range\":%u,\"range_label\":\"%s\","
                           "\"hold\":%s,"
-                          "\"function_pending\":%s,\"zero_pending\":%s,"
+                          "\"function_pending\":%s,\"range_pending\":%s,\"range_auto\":%s,\"zero_pending\":%s,"
                           "\"last_command_ok\":%s,\"last_mark_sequence\":%u,"
                           "\"request_id\":%u,\"generation\":%u,\"last_error\":%d,"
                           "\"sample_available\":%s}",
@@ -559,6 +581,8 @@ static esp_err_t control_api_get_handler(httpd_req_t *req)
                           (unsigned)state.range, measurement_range_name(state.range),
                           state.hold ? "true" : "false",
                           state.function_pending ? "true" : "false",
+                          state.range_pending ? "true" : "false",
+                          state.range_auto ? "true" : "false",
                           state.zero_pending ? "true" : "false",
                           state.last_command_ok ? "true" : "false",
                           (unsigned)state.last_mark_sequence,
@@ -601,6 +625,28 @@ static esp_err_t control_function_post_handler(httpd_req_t *req)
     return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
 }
 
+static esp_err_t control_range_post_handler(httpd_req_t *req)
+{
+    char body[64];
+    char value[16];
+    uint8_t range = ASW_OFF;
+    if (control_read_form(req, body, sizeof(body)) != ESP_OK ||
+        !form_get_value(body, "range", value, sizeof(value))) {
+        return control_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+    if (strcmp(value, "auto") != 0) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(value, &end, 10);
+        if (*value == '\0' || end == value || *end != '\0' || parsed > 255) {
+            return control_send_error(req, ESP_ERR_INVALID_ARG);
+        }
+        range = (uint8_t)parsed;
+    }
+    uint32_t request_id = 0;
+    esp_err_t err = control_submit_range(range, &request_id);
+    return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
+}
+
 static esp_err_t control_hold_post_handler(httpd_req_t *req)
 {
     char body[64];
@@ -629,6 +675,106 @@ static esp_err_t control_mark_post_handler(httpd_req_t *req)
     return err == ESP_OK ? control_send_accepted(req, request_id) : control_send_error(req, err);
 }
 
+static bool mdns_hostname_valid(const char *name)
+{
+    size_t length = strlen(name);
+    if (length == 0 || length > 63 || name[0] == '-' || name[length - 1] == '-') {
+        return false;
+    }
+    for (size_t i = 0; i < length; ++i) {
+        char c = name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static esp_err_t settings_api_get_handler(httpd_req_t *req)
+{
+    char escaped_ssid[100];
+    char json[256];
+    json_escape(wifi_ssid, escaped_ssid, sizeof(escaped_ssid));
+    snprintf(json, sizeof(json), "{\"mdns_hostname\":\"%s\",\"ssid\":\"%s\"}",
+             mdns_hostname, escaped_ssid);
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t wifi_store_credentials(const char *ssid, const char *password)
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open("wificonfig", NVS_READWRITE, &handle);
+    if (err == ESP_OK) err = nvs_set_str(handle, "SSID", ssid);
+    if (err == ESP_OK) err = nvs_set_str(handle, "PASSWORD", password);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    if (handle) nvs_close(handle);
+    if (err == ESP_OK) {
+        strlcpy(wifi_ssid, ssid, sizeof(wifi_ssid));
+        strlcpy(wifi_pass, password, sizeof(wifi_pass));
+        ESP_LOGI(WIFINET, "Wi-Fi settings saved: SSID='%s', password length=%u (value hidden)",
+                 ssid, (unsigned)strlen(password));
+    }
+    return err;
+}
+
+static void wifi_schedule_apply(void)
+{
+    if (!config_apply_started) {
+        config_apply_started = true;
+        if (xTaskCreate(wifi_apply_task, "wifi_apply", 4096, NULL, 5, NULL) != pdPASS) {
+            config_apply_started = false;
+            ESP_LOGE(WIFINET, "failed to create Wi-Fi apply task");
+        }
+    }
+}
+
+static esp_err_t settings_wifi_post_handler(httpd_req_t *req)
+{
+    char body[512], ssid[32], password[64];
+    if (config_apply_started) return control_send_error(req, ESP_ERR_INVALID_STATE);
+    if (control_read_form(req, body, sizeof(body)) != ESP_OK ||
+        !form_get_value(body, "ssid", ssid, sizeof(ssid)) || ssid[0] == '\0' ||
+        !form_get_value(body, "password", password, sizeof(password)) ||
+        (password[0] != '\0' && strlen(password) < 8)) {
+        return control_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+    if (password[0] == '\0' && strcmp(ssid, wifi_ssid) == 0) {
+        strlcpy(password, wifi_pass, sizeof(password));
+    }
+    esp_err_t err = wifi_store_credentials(ssid, password);
+    if (err != ESP_OK) return control_send_error(req, err);
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_sendstr(req, "{\"accepted\":true,\"message\":\"Wi-Fi will reconnect\"}");
+    wifi_apply_from_web = true;
+    wifi_schedule_apply();
+    return ESP_OK;
+}
+
+static esp_err_t settings_mdns_post_handler(httpd_req_t *req)
+{
+    char body[128], hostname[64];
+    if (control_read_form(req, body, sizeof(body)) != ESP_OK ||
+        !form_get_value(body, "hostname", hostname, sizeof(hostname)) ||
+        !mdns_hostname_valid(hostname)) {
+        return control_send_error(req, ESP_ERR_INVALID_ARG);
+    }
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open("wificonfig", NVS_READWRITE, &handle);
+    if (err == ESP_OK) err = nvs_set_str(handle, "MDNS", hostname);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    if (handle) nvs_close(handle);
+    if (err != ESP_OK) return control_send_error(req, err);
+    strlcpy(mdns_hostname, hostname, sizeof(mdns_hostname));
+    if (mdns_started) {
+        err = mdns_hostname_set(mdns_hostname);
+        if (err != ESP_OK) return control_send_error(req, err);
+    }
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    return httpd_resp_sendstr(req, "{\"accepted\":true}");
+}
+
 static esp_err_t status_page_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -652,7 +798,7 @@ static void status_httpd_start(void)
     }
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     if (httpd_start(&status_httpd, &config) != ESP_OK) {
         status_httpd = NULL;
         ESP_LOGE(WIFINET, "failed to start Wi-Fi status web server");
@@ -688,6 +834,12 @@ static void status_httpd_start(void)
         .handler = control_function_post_handler,
         .user_ctx = NULL,
     };
+    static const httpd_uri_t control_range_uri = {
+        .uri = "/api/control/range",
+        .method = HTTP_POST,
+        .handler = control_range_post_handler,
+        .user_ctx = NULL,
+    };
     static const httpd_uri_t control_hold_uri = {
         .uri = "/api/control/hold",
         .method = HTTP_POST,
@@ -706,24 +858,49 @@ static void status_httpd_start(void)
         .handler = control_mark_post_handler,
         .user_ctx = NULL,
     };
+    static const httpd_uri_t settings_get_uri = {
+        .uri = "/api/settings",
+        .method = HTTP_GET,
+        .handler = settings_api_get_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t settings_wifi_uri = {
+        .uri = "/api/settings/wifi",
+        .method = HTTP_POST,
+        .handler = settings_wifi_post_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t settings_mdns_uri = {
+        .uri = "/api/settings/mdns",
+        .method = HTTP_POST,
+        .handler = settings_mdns_post_handler,
+        .user_ctx = NULL,
+    };
     esp_err_t page_err = httpd_register_uri_handler(status_httpd, &page_uri);
     esp_err_t api_err = httpd_register_uri_handler(status_httpd, &api_uri);
     esp_err_t measurement_err = httpd_register_uri_handler(status_httpd, &measurement_uri);
     esp_err_t control_get_err = httpd_register_uri_handler(status_httpd, &control_get_uri);
     esp_err_t control_function_err = httpd_register_uri_handler(status_httpd, &control_function_uri);
+    esp_err_t control_range_err = httpd_register_uri_handler(status_httpd, &control_range_uri);
     esp_err_t control_hold_err = httpd_register_uri_handler(status_httpd, &control_hold_uri);
     esp_err_t control_zero_err = httpd_register_uri_handler(status_httpd, &control_zero_uri);
     esp_err_t control_mark_err = httpd_register_uri_handler(status_httpd, &control_mark_uri);
+    esp_err_t settings_get_err = httpd_register_uri_handler(status_httpd, &settings_get_uri);
+    esp_err_t settings_wifi_err = httpd_register_uri_handler(status_httpd, &settings_wifi_uri);
+    esp_err_t settings_mdns_err = httpd_register_uri_handler(status_httpd, &settings_mdns_uri);
     if (page_err != ESP_OK || api_err != ESP_OK || measurement_err != ESP_OK ||
-        control_get_err != ESP_OK || control_function_err != ESP_OK ||
+        control_get_err != ESP_OK || control_function_err != ESP_OK || control_range_err != ESP_OK ||
         control_hold_err != ESP_OK ||
-        control_zero_err != ESP_OK || control_mark_err != ESP_OK) {
-        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s control_get=%s function=%s hold=%s zero=%s mark=%s",
+        control_zero_err != ESP_OK || control_mark_err != ESP_OK ||
+        settings_get_err != ESP_OK || settings_wifi_err != ESP_OK || settings_mdns_err != ESP_OK) {
+        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s control_get=%s function=%s range=%s hold=%s zero=%s mark=%s settings=%s wifi=%s mdns=%s",
                  esp_err_to_name(page_err), esp_err_to_name(api_err),
                  esp_err_to_name(measurement_err), esp_err_to_name(control_get_err),
                  esp_err_to_name(control_function_err),
+                 esp_err_to_name(control_range_err),
                  esp_err_to_name(control_hold_err), esp_err_to_name(control_zero_err),
-                 esp_err_to_name(control_mark_err));
+                 esp_err_to_name(control_mark_err), esp_err_to_name(settings_get_err),
+                 esp_err_to_name(settings_wifi_err), esp_err_to_name(settings_mdns_err));
         status_httpd_stop();
         return;
     }
@@ -733,8 +910,8 @@ static void status_httpd_start(void)
 static const char config_page[] =
     "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>IOT7 Wi-Fi</title></head><body>"
-    "<h2>IOT7 Wi-Fi Settings</h2>"
+    "<title>Doer.ee Wi-Fi</title></head><body>"
+    "<h2>Doer.ee Wi-Fi Settings</h2>"
     "<p>Enter your router's Wi-Fi name and password. The device will connect after saving.</p>"
     "<form method='post' action='/save'>"
     "<label>Wi-Fi name (SSID)<br><input name='ssid' maxlength='31' required></label><br><br>"
@@ -840,8 +1017,11 @@ static void config_httpd_start(void)
 
 static void wifi_apply_task(void *arg)
 {
+    bool from_web = wifi_apply_from_web;
+    wifi_reconfiguring = from_web;
+    wifi_apply_from_web = false;
     vTaskDelay(pdMS_TO_TICKS(1200));
-    if (config_httpd != NULL) {
+    if (!from_web && config_httpd != NULL) {
         httpd_stop(config_httpd);
         config_httpd = NULL;
     }
@@ -852,6 +1032,9 @@ static void wifi_apply_task(void *arg)
     strlcpy((char *)wifi_config.sta.password, wifi_pass, sizeof(wifi_config.sta.password));
     ESP_LOGI(WIFINET, "Switching AP to STA: SSID='%s', password length=%u (value hidden)",
              wifi_ssid, (unsigned)strlen(wifi_pass));
+    if (from_web) {
+        esp_wifi_disconnect();
+    }
     esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
     ESP_LOGI(WIFINET, "esp_wifi_set_mode(STA): %s (0x%x)", esp_err_to_name(err), err);
     ESP_ERROR_CHECK(err);
@@ -861,6 +1044,7 @@ static void wifi_apply_task(void *arg)
     wifi_config_ap_active = false;
     net_state = 0;
     wifi_connect_with_log("WEB_SAVE");
+    wifi_reconfiguring = false;
     config_apply_started = false;
     vTaskDelete(NULL);
 }
@@ -881,7 +1065,7 @@ static void wifi_config_ap_start_internal(void)
     char ap_ssid[33] = {0};
     size_t id_len = strlen(device_ID);
     const char *suffix = id_len > 4 ? device_ID + id_len - 4 : device_ID;
-    snprintf(ap_ssid, sizeof(ap_ssid), "IOT7-Setup-%s", suffix);
+    snprintf(ap_ssid, sizeof(ap_ssid), "Doer.ee-Setup-%s", suffix);
     strlcpy((char *)ap_config.ap.ssid, ap_ssid, sizeof(ap_config.ap.ssid));
     strlcpy((char *)ap_config.ap.password, CONFIG_AP_PASSWORD, sizeof(ap_config.ap.password));
     ap_config.ap.ssid_len = strlen(ap_ssid);
@@ -942,6 +1126,11 @@ static void app_wifi_initialise(void)
         } else {
             ESP_LOGW(WIFINET, "NVS Wi-Fi password read: %s (0x%x), required buffer=%u",
                      esp_err_to_name(err), err, (unsigned)Len);
+        }
+        Len = sizeof(mdns_hostname);
+        err = nvs_get_str(wificonfig_get_handle, "MDNS", mdns_hostname, &Len);
+        if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(WIFINET, "NVS mDNS hostname read: %s (0x%x)", esp_err_to_name(err), err);
         }
         nvs_close(wificonfig_get_handle);
     } else {
