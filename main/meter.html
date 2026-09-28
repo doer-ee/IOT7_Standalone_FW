@@ -24,6 +24,16 @@
     .signal-bars i { display:block; width:3px; border-radius:2px; background:#4a5b67; }
     .signal-bars i:nth-child(1) { height:5px; } .signal-bars i:nth-child(2) { height:8px; } .signal-bars i:nth-child(3) { height:12px; } .signal-bars i:nth-child(4) { height:16px; }
     .signal-bars.level-1 i:nth-child(-n+1), .signal-bars.level-2 i:nth-child(-n+2), .signal-bars.level-3 i:nth-child(-n+3), .signal-bars.level-4 i:nth-child(-n+4) { background:#55d49a; box-shadow:0 0 7px #55d49a66; }
+    .battery-indicator { position:relative; display:inline-flex; align-items:center; justify-content:center; width:43px; height:21px; margin-left:2px; border:1px solid #718391; border-radius:4px; color:#eaf2f5; font-size:9px; font-weight:850; font-variant-numeric:tabular-nums; line-height:1; }
+    .battery-indicator::after { content:""; position:absolute; top:6px; right:-4px; width:3px; height:8px; border-radius:0 2px 2px 0; background:#718391; }
+    .battery-fill { position:absolute; z-index:0; left:2px; top:2px; bottom:2px; width:0; border-radius:2px; background:#55d49a; opacity:.42; transition:width .25s ease,background .25s ease; }
+    .battery-indicator #battery_level { position:relative; z-index:1; }
+    .battery-indicator[data-state="low"] { border-color:#ff7070; color:#ffd9d9; }
+    .battery-indicator[data-state="low"]::after { background:#ff7070; }
+    .battery-indicator[data-state="low"] .battery-fill { background:#ff7070; }
+    .battery-indicator[data-state="charging"] { border-color:#ffbd54; color:#ffe6b2; }
+    .battery-indicator[data-state="charging"]::after { background:#ffbd54; }
+    .battery-indicator[data-state="charging"] .battery-fill { background:#ffbd54; }
     .top-tools, .header-actions { position:relative; display:flex; align-items:center; gap:7px; }
     .header-actions { flex-shrink:0; }
     .header-button, .icon-button { min-height:32px; border:1px solid #536171; border-radius:9px; background:#1c2a35; color:#d9e4eb; font-size:11px; font-weight:800; }
@@ -120,12 +130,11 @@
   <div class="shell"><div class="screen">
     <header class="topbar">
       <div class="brand"><span class="brand-mark">D</span><span>Doer.ee<small>STANDALONE METER</small></span></div>
-      <div class="top-state"><span class="wifi-summary"><i id="online_dot" class="online-dot"></i><span id="connection">Connecting</span></span><span id="ssid"></span><span id="wifi_bars" class="signal-bars level-0" aria-label="Wi-Fi signal"><i></i><i></i><i></i><i></i></span><div class="top-tools"><button id="settings_button" class="icon-button" type="button" aria-label="Open settings" aria-expanded="false">⚙</button><div id="settings_menu" class="settings-menu" hidden><div class="settings-title">Settings</div><form id="wifi_form" class="settings-form"><label class="settings-label" for="wifi_ssid">Wi-Fi SSID</label><input id="wifi_ssid" class="settings-input" maxlength="31" required autocomplete="off"><label class="settings-label" for="wifi_password">New Wi-Fi password</label><input id="wifi_password" class="settings-input" type="password" maxlength="63" autocomplete="new-password" placeholder="Blank keeps current password"><button class="settings-item" type="submit">Save Wi-Fi and reconnect</button></form><form id="mdns_form" class="settings-form"><label class="settings-label" for="mdns_name">mDNS hostname</label><input id="mdns_name" class="settings-input" maxlength="63" pattern="[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9]" placeholder="doer-meter" required><button class="settings-item" type="submit">Save hostname</button></form><div class="settings-row"><span>Browser polling</span><strong>1 second</strong></div><div class="settings-row"><span>Chart window</span><strong>60 samples</strong></div><div class="settings-row"><span>Display units</span><strong>Auto scale</strong></div><p id="settings_message" class="settings-message" role="status">Wi-Fi changes may disconnect this page. A blank password keeps the current password for the same SSID; for a different SSID it selects an open network.</p></div></div></div>
+      <div class="top-state"><span class="wifi-summary"><i id="online_dot" class="online-dot"></i><span id="connection">Connecting</span></span><span id="ssid"></span><span id="wifi_bars" class="signal-bars level-0" aria-label="Wi-Fi signal"><i></i><i></i><i></i><i></i></span><span id="battery_indicator" class="battery-indicator" data-state="unknown" aria-label="Battery level unavailable" title="Battery level unavailable"><span id="battery_fill" class="battery-fill"></span><span id="battery_level">--</span></span><div class="top-tools"><button id="settings_button" class="icon-button" type="button" aria-label="Open settings" aria-expanded="false">⚙</button><div id="settings_menu" class="settings-menu" hidden><div class="settings-title">Settings</div><form id="wifi_form" class="settings-form"><label class="settings-label" for="wifi_ssid">Wi-Fi SSID</label><input id="wifi_ssid" class="settings-input" maxlength="31" required autocomplete="off"><label class="settings-label" for="wifi_password">New Wi-Fi password</label><input id="wifi_password" class="settings-input" type="password" maxlength="63" autocomplete="new-password" placeholder="Blank keeps current password"><button class="settings-item" type="submit">Save Wi-Fi and reconnect</button></form><form id="mdns_form" class="settings-form"><label class="settings-label" for="mdns_name">mDNS hostname</label><input id="mdns_name" class="settings-input" maxlength="63" pattern="[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9]" placeholder="doer-meter" required><button class="settings-item" type="submit">Save hostname</button></form><div class="settings-row"><span>Browser polling</span><strong>1 second</strong></div><div class="settings-row"><span>Chart window</span><strong>60 samples</strong></div><div class="settings-row"><span>Display units</span><strong>Auto scale</strong></div><p id="settings_message" class="settings-message" role="status">Wi-Fi changes may disconnect this page. A blank password keeps the current password for the same SSID; for a different SSID it selects an open network.</p></div></div></div>
     </header>
     <main id="main_dashboard" class="main">
       <div class="meter-head"><div><div class="eyebrow">Live measurement</div><h1 id="function_name">Waiting for meter</h1></div><div class="header-actions"><span id="range" class="range-pill">Range --</span><button id="collect_button" class="header-button" type="button">Collect Data</button></div></div>
       <section class="reading-panel" aria-live="polite"><div id="reading_state" class="read-state warn">Waiting for sample</div><div class="reading-line"><span id="reading">--</span><span id="reading_unit"></span></div><div class="reading-meta"><strong id="signal_type">DC</strong> <span id="reading_hint">Select a function below</span></div></section>
-      <div class="metrics"><div class="metric"><span>Battery</span><strong id="battery">--</strong></div><div class="metric"><span>Sample age</span><strong id="sample_age">--</strong></div><div class="metric"><span>Sample interval</span><strong id="interval">--</strong></div></div>
       <section class="trace"><div class="trace-head"><span>Live trace</span><span id="trace_count">Waiting for data</span></div><div class="trace-body"><div class="trace-scale"><span id="trace_max">--</span><span id="trace_min">--</span></div><canvas id="trace" aria-label="Recent measurement trend"></canvas></div></section>
       <div class="toolbar"><h2>Measurement mode</h2><p id="control_state">Loading controls</p></div>
       <nav class="mode-grid" aria-label="Measurement function"><button class="mode" data-group="voltage" type="button"><span class="mode-symbol">V</span><span class="mode-label">Voltage</span></button><button class="mode" data-group="current" type="button"><span class="mode-symbol">A</span><span class="mode-label">Current</span></button><button class="mode" data-group="resistance" type="button"><span class="mode-symbol">Ω</span><span class="mode-label">Resistance</span></button><button class="mode" data-group="continuity" type="button"><span class="mode-symbol">⌁</span><span class="mode-label">Continuity</span></button><button class="mode" data-group="diode" type="button"><span class="mode-symbol">▷│</span><span class="mode-label">Diode</span></button><button class="mode" data-group="power" type="button"><span class="mode-symbol">W</span><span class="mode-label">Power</span></button></nav>
@@ -142,12 +151,23 @@
     const groupFor = id => [3,4,5,6].includes(id) ? 'current' : Object.keys(modes).find(group => modes[group].some(entry => entry[0] === id)) || 'voltage';
     const preferred = {voltage:1,current:3,resistance:7,continuity:8,diode:11,power:9};
     const rangeOptions = {voltage:['Auto','1000 V','100 V','10 V'],current:['Auto','250 mA','2.5 A'],resistance:['Auto','1 MΩ','100 kΩ','10 kΩ','1 kΩ'],continuity:['Auto'],diode:['Auto'],power:['Auto']};
-    let activeFunction = 1, requestedFunction = null, functionPending = false, rangePending = false, holdEnabled = false, lastSequence = 0, lastTimestamp = 0, traceMode = '', tracePoints = [], traceBaseUnit = '', rangeSelection = 'Auto';
+    const readableRanges = {'DCV1':'1000 V','DCV2':'100 V','DCV3':'10 V','ACV1':'1000 V','ACV2':'100 V','ACV3':'10 V','DC mA':'250 mA','DC A':'2.5 A','AC mA':'250 mA','AC A':'2.5 A','R2':'1 MΩ','R3':'100 kΩ','R4':'10 kΩ','R5':'1 kΩ','Continuity':'Continuity'};
+    let activeFunction = 1, requestedFunction = null, functionPending = false, rangePending = false, holdEnabled = false, lastSequence = 0, traceMode = '', tracePoints = [], traceBaseUnit = '', rangeSelection = 'Auto';
     function setText(id, value) { el(id).textContent = value == null ? '--' : String(value); }
     async function getJson(url) { const response = await fetch(url, {cache:'no-store'}); if (!response.ok) throw Error('HTTP '+response.status); return response.json(); }
     async function post(url, body) { const response = await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body || ''}); const result = await response.json(); if (!response.ok) throw Error(result.error || 'HTTP '+response.status); return result; }
     function feedback(message, error) { setText('feedback',message); el('feedback').classList.toggle('error',!!error); }
-    function batteryText(value) { if (value === 254) return 'Charging'; if (value === 255) return 'Normal'; if (value === 0) return 'Low'; return value >= 1 && value <= 100 ? value+'%' : 'Unknown'; }
+    function updateBattery(value) {
+      const indicator=el('battery_indicator'), fill=el('battery_fill');
+      let text='--', level=0, state='unknown';
+      if (value === 254) { text='⚡'; level=100; state='charging'; }
+      else if (value === 255) { state='normal'; }
+      else if (value >= 0 && value <= 100) { text=value+'%'; level=value; state=value <= 10 ? 'low' : 'normal'; }
+      fill.style.width=level+'%'; indicator.dataset.state=state;
+      indicator.setAttribute('aria-label', text === '⚡' ? 'Battery charging' : text === '--' ? 'Battery level unavailable' : 'Battery '+text);
+      indicator.title=indicator.getAttribute('aria-label'); setText('battery_level',text);
+    }
+    function readableRangeLabel(label) { const value=readableRanges[label]; return value ? 'Range '+value : label && label !== 'Unknown' ? 'Range '+label : 'Range --'; }
     function signalText(rssi) { return rssi >= -50 ? 'Excellent' : rssi >= -65 ? 'Good' : rssi >= -75 ? 'Fair' : 'Weak'; }
     const unitBase = {uV:['V',1e-6],mV:['V',1e-3],uA:['A',1e-6],mOhm:['Ω',1e-3],Ohm:['Ω',1],uW:['W',1e-6]};
     function formatBase(value, base) {
@@ -261,11 +281,10 @@
     async function refreshMeasurement() {
       try {
         const m = await getJson('/api/measurement');
-        setText('function_name',m.function); setText('range',m.range_label || 'Range --'); setText('battery',batteryText(m.battery)); setText('signal_type',signalType(m.function_id));
+        setText('function_name',m.function); setText('range',readableRangeLabel(m.range_label)); updateBattery(m.battery); setText('signal_type',signalType(m.function_id));
         setText('raw',m.sample_ready ? m.value_raw+' '+(m.unit || '') : '--'); setText('sequence',m.sample_ready ? m.sample_sequence : '--');
-        if (!m.sample_ready) { setText('reading','--'); setText('reading_unit',''); setText('reading_state',m.range_switching ? 'Adjusting range' : 'Waiting for sample'); el('reading_state').className='read-state warn'; setText('reading_hint','Measurement is settling'); setText('sample_age','--'); lastSequence=0; return; }
-        setText('sample_age',m.sample_age_ms+' ms');
-        if (m.sample_sequence !== lastSequence) { if (lastTimestamp && m.timestamp_ms > lastTimestamp) setText('interval',((m.timestamp_ms-lastTimestamp)/1000).toFixed(2)+' s'); lastTimestamp=m.timestamp_ms; lastSequence=m.sample_sequence; }
+        if (!m.sample_ready) { setText('reading','--'); setText('reading_unit',''); setText('reading_state',m.range_switching ? 'Adjusting range' : 'Waiting for sample'); el('reading_state').className='read-state warn'; setText('reading_hint','Measurement is settling'); lastSequence=0; return; }
+        if (m.sample_sequence !== lastSequence) lastSequence=m.sample_sequence;
         let state='Live sample', className='read-state';
         if (m.hold) { state='Held reading'; className+=' warn'; }
         else if (m.sample_age_ms > 5000) { state='Sample is stale'; className+=' warn'; }
