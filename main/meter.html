@@ -8,11 +8,12 @@
   <style>
     :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --ink:#eaf0f4; --muted:#8fa0af; --orange:#ffac2e; --panel:#17232e; --line:#30404d; }
     * { box-sizing: border-box; }
-    body { min-height:100vh; margin:0; color:var(--ink); background:radial-gradient(circle at 50% -20%,#2b3942,#10161c 64%); }
+    html, body { height:100%; }
+    body { min-height:100%; margin:0; overflow:hidden; color:var(--ink); background:radial-gradient(circle at 50% -20%,#2b3942,#10161c 64%); }
     button { font:inherit; cursor:pointer; }
     button:disabled { cursor:wait; opacity:.5; }
-    .shell { max-width:1040px; margin:clamp(14px,4vw,48px) auto; padding:clamp(8px,1.3vw,14px); border-radius:30px; background:linear-gradient(145deg,#ffc44d,#dd8d13); box-shadow:0 28px 80px #0009, inset 0 2px 2px #fff8; }
-    .screen { overflow:hidden; border:5px solid #20252a; border-radius:23px; background:#101a23; box-shadow:inset 0 0 0 1px #45505a, inset 0 15px 32px #0006; }
+    .shell { width:min(1040px,100vw); height:100vh; margin:0 auto; padding:clamp(5px,1.3vw,14px); border-radius:30px; background:linear-gradient(145deg,#ffc44d,#dd8d13); box-shadow:0 28px 80px #0009, inset 0 2px 2px #fff8; }
+    .screen { display:flex; flex-direction:column; height:100%; overflow:hidden; border:5px solid #20252a; border-radius:23px; background:#101a23; box-shadow:inset 0 0 0 1px #45505a, inset 0 15px 32px #0006; }
     .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:17px 22px; background:#0b131b; border-bottom:1px solid #35434d; }
     .brand { display:flex; align-items:center; gap:11px; min-width:0; font-size:19px; font-weight:900; letter-spacing:.09em; }
     .brand-mark { display:grid; place-items:center; width:31px; height:31px; border-radius:9px; background:var(--orange); color:#17202a; font-size:19px; letter-spacing:0; box-shadow:0 0 18px #ffac2e55; }
@@ -20,12 +21,12 @@
     .top-state { display:flex; align-items:center; gap:14px; color:#b5c1cb; font-size:12px; font-weight:650; white-space:nowrap; }
     .online-dot { display:inline-block; width:8px; height:8px; margin-right:6px; border-radius:50%; background:#d78c48; box-shadow:0 0 0 4px #d78c4822; }
     .online-dot.connected { background:#56d69c; box-shadow:0 0 0 4px #56d69c22; }
-    .main { padding:clamp(18px,3vw,34px); }
+    .main { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; overflow:hidden; padding:clamp(12px,2.4vh,34px) clamp(18px,3vw,34px); }
     .eyebrow { color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.19em; text-transform:uppercase; }
     .meter-head { display:flex; align-items:start; justify-content:space-between; gap:14px; }
     h1 { margin:7px 0 0; font-size:clamp(22px,3.2vw,34px); letter-spacing:-.035em; line-height:1.1; }
     .range-pill { padding:8px 12px; border:1px solid #536171; border-radius:99px; color:#bdc9d2; font-size:12px; font-weight:700; white-space:nowrap; }
-    .reading-panel { position:relative; min-height:235px; display:flex; flex-direction:column; align-items:center; justify-content:center; margin:25px 0 20px; border:1px solid #2b3946; border-radius:19px; background:radial-gradient(circle at 50% 5%,#253542,#17232e 65%); box-shadow:inset 0 2px 18px #0004; text-align:center; }
+    .reading-panel { position:relative; min-height:0; display:flex; flex:0 0 clamp(150px,21vh,235px); flex-direction:column; align-items:center; justify-content:center; margin:clamp(12px,2.2vh,25px) 0 clamp(12px,1.8vh,20px); border:1px solid #2b3946; border-radius:19px; background:radial-gradient(circle at 50% 5%,#253542,#17232e 65%); box-shadow:inset 0 2px 18px #0004; text-align:center; }
     .read-state { display:flex; align-items:center; justify-content:center; gap:8px; color:#b5c5cf; font-size:11px; font-weight:750; letter-spacing:.17em; text-transform:uppercase; }
     .read-state::before { content:""; width:7px; height:7px; border-radius:50%; background:#48d49a; box-shadow:0 0 12px #48d49a; }
     .read-state.warn::before { background:#ffad43; box-shadow:0 0 12px #ffad43; }
@@ -40,9 +41,9 @@
     .metric { min-height:66px; padding:12px 14px; border:1px solid #30404d; border-radius:12px; background:#1b2833; }
     .metric span { display:block; margin-bottom:7px; color:#8fa2b0; font-size:10px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
     .metric strong { display:block; overflow:hidden; color:#e6edf2; font-size:15px; font-variant-numeric:tabular-nums; text-overflow:ellipsis; white-space:nowrap; }
-    .trace { padding:16px 17px 13px; border:1px solid #30404d; border-radius:14px; background:#17232d; }
+    .trace { flex:0 0 clamp(86px,13vh,145px); min-height:0; overflow:hidden; padding:12px 17px 9px; border:1px solid #30404d; border-radius:14px; background:#17232d; }
     .trace-head { display:flex; justify-content:space-between; gap:10px; color:#a8b8c3; font-size:11px; font-weight:750; letter-spacing:.1em; text-transform:uppercase; }
-    #trace { display:block; width:100%; height:115px; margin-top:12px; }
+    #trace { display:block; width:100%; height:calc(100% - 25px); min-height:0; margin-top:8px; }
     .toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:20px 0 13px; }
     .toolbar h2 { margin:0; font-size:16px; letter-spacing:-.015em; }
     .toolbar p { margin:0; color:#8fa2b0; font-size:12px; }
@@ -67,7 +68,9 @@
     .details-grid div { min-width:0; }
     .details-grid span { display:block; margin-bottom:4px; color:#788d9d; font-size:10px; text-transform:uppercase; letter-spacing:.1em; }
     .details-grid strong { display:block; overflow-wrap:anywhere; color:#d8e3eb; font-size:12px; font-weight:650; }
-    @media (max-width:700px) { .shell { margin:0; padding:5px; border-radius:0; min-height:100vh; } .screen { min-height:calc(100vh - 10px); border-width:3px; border-radius:12px; } .topbar { padding:14px; } .top-state { gap:8px; font-size:10px; } .brand { font-size:15px; } .main { padding:18px 14px 26px; } .reading-panel { min-height:195px; } .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } .mode-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } .mode { min-height:67px; } .details-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:700px) { .shell { margin:0; padding:5px; border-radius:0; } .screen { border-width:3px; border-radius:12px; } .topbar { padding:14px; } .top-state { gap:8px; font-size:10px; } .brand { font-size:15px; } .main { padding:12px 14px 14px; } .reading-panel { min-height:140px; } .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; } .metric { min-height:53px; padding:9px 11px; } .mode-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; } .mode { min-height:57px; } .mode-symbol { font-size:22px; } .details-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-height:900px) { .topbar { padding:10px 18px; } .brand-mark { width:27px; height:27px; } .brand { font-size:16px; } .main { padding:8px 20px 9px; } h1 { font-size:26px; } .reading-panel { flex:1 1 145px; flex-basis:145px; margin-top:8px; margin-bottom:8px; } #reading { font-size:clamp(44px,8vw,82px); } .metrics { gap:7px; margin-bottom:8px; } .metric { min-height:48px; padding:8px 11px; } .trace { flex-basis:80px; padding:8px 12px 6px; } .trace-head { font-size:10px; } .toolbar { margin-top:8px; margin-bottom:5px; } .mode { min-height:53px; } .mode-symbol { font-size:22px; } .variant-row { min-height:35px; padding-top:5px; } .actions { margin-top:8px; padding-top:8px; } .action { min-height:33px; } .feedback { min-height:14px; margin-top:4px; } details { display:none; } }
+    @media (max-height:760px) { .topbar { padding-top:10px; padding-bottom:10px; } .main { padding-top:8px; padding-bottom:9px; } .reading-panel { min-height:120px; margin-top:8px; margin-bottom:8px; } .metrics { margin-bottom:8px; } .metric { min-height:50px; padding:8px 11px; } .trace { flex-basis:82px; } .toolbar { margin-top:10px; margin-bottom:7px; } .mode { min-height:54px; } .variant-row { min-height:39px; padding-top:6px; } .actions { margin-top:9px; padding-top:9px; } .feedback { margin-top:5px; } details { margin-top:7px; } }
     @media (max-width:380px) { .top-state #ssid { display:none; } #reading { font-size:50px; } #reading.compact { font-size:39px; } .reading-line { gap:7px; } }
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { transition:none!important; } }
   </style>
