@@ -141,7 +141,7 @@
     .session-actions { display:flex; gap:6px; margin-top:8px; }
     .session-actions button { min-height:28px; padding:4px 8px; border:1px solid #536171; border-radius:7px; background:#243541; color:#d9e4eb; font-size:10px; font-weight:750; }
     .session-actions button:disabled { cursor:not-allowed; }
-    .session-name { width:100%; min-height:29px; padding:5px 7px; border:1px solid #405260; border-radius:7px; background:#0f1b24; color:#eef5f8; font-size:12px; font-weight:750; }
+    .session-name { flex:1 1 auto; min-width:0; width:auto; min-height:29px; padding:5px 7px; border:1px solid #405260; border-radius:7px; background:#0f1b24; color:#eef5f8; font-size:12px; font-weight:750; }
     .session-select { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:12px 0 10px; }
     .session-select[hidden], .session-choice[hidden] { display:none; }
     .session-select label { display:flex; align-items:center; gap:7px; color:#a9bbc7; font-size:11px; font-weight:750; white-space:nowrap; }
@@ -149,8 +149,7 @@
     .session-select input:disabled,.session-choice input:disabled { cursor:not-allowed; }
     .session-select button { min-height:29px; padding:4px 9px; border:1px solid #a65757; border-radius:7px; background:#45272b; color:#ffcccc; font-size:10px; font-weight:750; }
     .session-select button:disabled { cursor:not-allowed; opacity:.5; }
-    .session-choice { display:flex; align-items:center; gap:9px; min-width:0; flex:1; }
-    .session-choice .session-name { flex:1; min-width:0; }
+    .session-choice { display:flex; align-items:center; justify-content:center; flex:0 0 15px; width:15px; min-width:15px; gap:0; }
     .settings-layout { display:grid; grid-template-columns:minmax(170px,220px) minmax(0,1fr); gap:16px; flex:1 1 auto; min-height:0; margin-top:18px; overflow:hidden; }
     .settings-nav { min-height:0; overflow:auto; padding:10px; border:1px solid #30404d; border-radius:15px; background:#17232e; }
     .settings-tab { display:flex; align-items:center; width:100%; min-height:42px; margin:0 0 6px; padding:9px 11px; border:1px solid transparent; border-radius:9px; background:transparent; color:#9eb0bd; text-align:left; font-size:12px; font-weight:800; transition:background .15s,border-color .15s,color .15s,transform .15s; }
