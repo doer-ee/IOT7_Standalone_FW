@@ -3,6 +3,8 @@
 #include "wifinet.h"
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_system.h"
 #include "mdns.h"
 #include <stdbool.h>
 #include <stdlib.h>
@@ -42,6 +44,7 @@ static bool config_apply_started = false;
 static bool wifi_apply_from_web = false;
 static unsigned int wifi_connect_attempts = 0;
 static unsigned int wifi_disconnect_count = 0;
+static volatile bool ota_upload_in_progress = false;
 
 static esp_err_t event_handler2(void *ctx, system_event_t *event);
 static esp_err_t wifi_stack_init_once(void);
@@ -58,6 +61,7 @@ static esp_err_t control_mark_post_handler(httpd_req_t *req);
 static esp_err_t settings_api_get_handler(httpd_req_t *req);
 static esp_err_t settings_wifi_post_handler(httpd_req_t *req);
 static esp_err_t settings_mdns_post_handler(httpd_req_t *req);
+static esp_err_t ota_upload_post_handler(httpd_req_t *req);
 static void status_httpd_start(void);
 static void status_httpd_stop(void);
 static void wifi_apply_task(void *arg);
@@ -827,6 +831,136 @@ static esp_err_t settings_mdns_post_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"accepted\":true}");
 }
 
+static esp_err_t ota_send_error(httpd_req_t *req, const char *status, int status_code, const char *message)
+{
+    char json[256];
+    snprintf(json, sizeof(json), "{\"accepted\":false,\"status\":%d,\"error\":\"%s\"}",
+             status_code, message);
+    httpd_resp_set_status(req, status);
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+}
+
+static void ota_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    ESP_LOGI(WIFINET, "OTA update accepted; restarting into the new firmware");
+    esp_restart();
+    vTaskDelete(NULL);
+}
+
+static esp_err_t ota_upload_post_handler(httpd_req_t *req)
+{
+    const esp_partition_t *update_partition = NULL;
+    esp_ota_handle_t ota_handle = 0;
+    bool ota_open = false;
+    bool image_header_checked = false;
+    size_t remaining = 0;
+    esp_err_t err = ESP_OK;
+    const char *error_status = "500 Internal Server Error";
+    int error_code = 500;
+    const char *error_message = "Firmware update failed";
+
+    if (collection_is_active()) {
+        return ota_send_error(req, "409 Conflict", 409,
+                              "Stop data collection before updating firmware");
+    }
+    if (ota_upload_in_progress) {
+        return ota_send_error(req, "409 Conflict", 409,
+                              "Another firmware update is already in progress");
+    }
+    if (req->content_len == 0) {
+        return ota_send_error(req, "400 Bad Request", 400,
+                              "Select a firmware .bin file");
+    }
+
+    update_partition = esp_ota_get_next_update_partition(NULL);
+    if (update_partition == NULL) {
+        return ota_send_error(req, "500 Internal Server Error", 500,
+                              "No OTA partition is available");
+    }
+    if (req->content_len > update_partition->size) {
+        return ota_send_error(req, "413 Payload Too Large", 413,
+                              "Firmware image is larger than the OTA partition");
+    }
+
+    ota_upload_in_progress = true;
+    err = esp_ota_begin(update_partition, req->content_len, &ota_handle);
+    if (err != ESP_OK) {
+        error_message = "Unable to start the firmware update";
+        goto ota_fail;
+    }
+    ota_open = true;
+    remaining = req->content_len;
+
+    while (remaining > 0) {
+        uint8_t buffer[4096];
+        size_t request_size = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+        int received = httpd_req_recv(req, (char *)buffer, request_size);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (received <= 0) {
+            error_status = "400 Bad Request";
+            error_code = 400;
+            error_message = "Firmware upload was interrupted";
+            err = ESP_FAIL;
+            goto ota_fail;
+        }
+        if (!image_header_checked) {
+            if (buffer[0] != 0xE9) {
+                error_status = "400 Bad Request";
+                error_code = 400;
+                error_message = "The selected file is not an ESP32 firmware image";
+                err = ESP_ERR_INVALID_ARG;
+                goto ota_fail;
+            }
+            image_header_checked = true;
+        }
+        err = esp_ota_write(ota_handle, buffer, (size_t)received);
+        if (err != ESP_OK) {
+            error_message = "Unable to write the firmware image";
+            goto ota_fail;
+        }
+        remaining -= (size_t)received;
+    }
+
+    err = esp_ota_end(ota_handle);
+    ota_open = false;
+    if (err != ESP_OK) {
+        error_status = "400 Bad Request";
+        error_code = 400;
+        error_message = "Firmware image validation failed";
+        goto ota_fail;
+    }
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        error_message = "Unable to select the new firmware partition";
+        goto ota_fail;
+    }
+
+    ota_upload_in_progress = false;
+    httpd_resp_set_status(req, "200 OK");
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    err = httpd_resp_sendstr(req,
+                             "{\"accepted\":true,\"message\":\"Firmware updated. The device will restart shortly.\"}");
+    if (xTaskCreate(ota_reboot_task, "ota_reboot", 2048, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(WIFINET, "Failed to create OTA reboot task; power cycle is required");
+    }
+    ESP_LOGI(WIFINET, "OTA image written to %s (%u bytes)",
+             update_partition->label, (unsigned)req->content_len);
+    return err;
+
+ota_fail:
+    if (ota_open) {
+        esp_ota_abort(ota_handle);
+    }
+    ota_upload_in_progress = false;
+    ESP_LOGE(WIFINET, "OTA upload failed: %s (%s)", error_message, esp_err_to_name(err));
+    return ota_send_error(req, error_status, error_code, error_message);
+}
+
 static esp_err_t status_page_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -929,6 +1063,12 @@ static void status_httpd_start(void)
         .handler = settings_mdns_post_handler,
         .user_ctx = NULL,
     };
+    static const httpd_uri_t ota_upload_uri = {
+        .uri = "/api/ota",
+        .method = HTTP_POST,
+        .handler = ota_upload_post_handler,
+        .user_ctx = NULL,
+    };
     esp_err_t page_err = httpd_register_uri_handler(status_httpd, &page_uri);
     esp_err_t api_err = httpd_register_uri_handler(status_httpd, &api_uri);
     esp_err_t measurement_err = httpd_register_uri_handler(status_httpd, &measurement_uri);
@@ -941,21 +1081,23 @@ static void status_httpd_start(void)
     esp_err_t settings_get_err = httpd_register_uri_handler(status_httpd, &settings_get_uri);
     esp_err_t settings_wifi_err = httpd_register_uri_handler(status_httpd, &settings_wifi_uri);
     esp_err_t settings_mdns_err = httpd_register_uri_handler(status_httpd, &settings_mdns_uri);
+    esp_err_t ota_upload_err = httpd_register_uri_handler(status_httpd, &ota_upload_uri);
     esp_err_t collection_err = collection_register_handlers(status_httpd);
     if (page_err != ESP_OK || api_err != ESP_OK || measurement_err != ESP_OK ||
         control_get_err != ESP_OK || control_function_err != ESP_OK || control_range_err != ESP_OK ||
         control_hold_err != ESP_OK ||
         control_zero_err != ESP_OK || control_mark_err != ESP_OK ||
         settings_get_err != ESP_OK || settings_wifi_err != ESP_OK || settings_mdns_err != ESP_OK ||
-        collection_err != ESP_OK) {
-        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s control_get=%s function=%s range=%s hold=%s zero=%s mark=%s settings=%s wifi=%s mdns=%s",
+        ota_upload_err != ESP_OK || collection_err != ESP_OK) {
+        ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s control_get=%s function=%s range=%s hold=%s zero=%s mark=%s settings=%s wifi=%s mdns=%s ota=%s",
                  esp_err_to_name(page_err), esp_err_to_name(api_err),
                  esp_err_to_name(measurement_err), esp_err_to_name(control_get_err),
                  esp_err_to_name(control_function_err),
                  esp_err_to_name(control_range_err),
                  esp_err_to_name(control_hold_err), esp_err_to_name(control_zero_err),
                  esp_err_to_name(control_mark_err), esp_err_to_name(settings_get_err),
-                 esp_err_to_name(settings_wifi_err), esp_err_to_name(settings_mdns_err));
+                 esp_err_to_name(settings_wifi_err), esp_err_to_name(settings_mdns_err),
+                 esp_err_to_name(ota_upload_err));
         status_httpd_stop();
         return;
     }
