@@ -70,16 +70,14 @@ static void sntp_set_time_sync_callback(struct timeval *tv)
     ESP_LOGI(WIFINET, "%d %d %d %d:%d:%d", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
              timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     time_state=1;
+    collection_time_synced();
 }
 
 static void esp_initialize_sntp(void)
 {
     ESP_LOGI(WIFINET, "Initializing SNTP");
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "ntp.aliyun.com");
-    sntp_setservername(1, "ntp.ntsc.ac.cn");
-    sntp_setservername(2, "edu.ntp.org.cn");
-    sntp_setservername(3, "time1.cloud.tencent.com");
+    sntp_setservername(0, (char *)collection_ntp_server());
 
 	sntp_set_time_sync_notification_cb(&sntp_set_time_sync_callback);
     sntp_init();
@@ -798,7 +796,7 @@ static void status_httpd_start(void)
     }
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 32;
     if (httpd_start(&status_httpd, &config) != ESP_OK) {
         status_httpd = NULL;
         ESP_LOGE(WIFINET, "failed to start Wi-Fi status web server");
@@ -888,11 +886,13 @@ static void status_httpd_start(void)
     esp_err_t settings_get_err = httpd_register_uri_handler(status_httpd, &settings_get_uri);
     esp_err_t settings_wifi_err = httpd_register_uri_handler(status_httpd, &settings_wifi_uri);
     esp_err_t settings_mdns_err = httpd_register_uri_handler(status_httpd, &settings_mdns_uri);
+    esp_err_t collection_err = collection_register_handlers(status_httpd);
     if (page_err != ESP_OK || api_err != ESP_OK || measurement_err != ESP_OK ||
         control_get_err != ESP_OK || control_function_err != ESP_OK || control_range_err != ESP_OK ||
         control_hold_err != ESP_OK ||
         control_zero_err != ESP_OK || control_mark_err != ESP_OK ||
-        settings_get_err != ESP_OK || settings_wifi_err != ESP_OK || settings_mdns_err != ESP_OK) {
+        settings_get_err != ESP_OK || settings_wifi_err != ESP_OK || settings_mdns_err != ESP_OK ||
+        collection_err != ESP_OK) {
         ESP_LOGE(WIFINET, "failed to register web routes: page=%s status=%s measurement=%s control_get=%s function=%s range=%s hold=%s zero=%s mark=%s settings=%s wifi=%s mdns=%s",
                  esp_err_to_name(page_err), esp_err_to_name(api_err),
                  esp_err_to_name(measurement_err), esp_err_to_name(control_get_err),

@@ -22,6 +22,7 @@
 #include "adc_dac.h"
 #include "control.h"
 #include "wifinet.h"
+#include "collection.h"
 #include "switch_fun.h"
 
 

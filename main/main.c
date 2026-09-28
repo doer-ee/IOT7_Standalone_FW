@@ -364,6 +364,7 @@ void app_main(void)
 	}
     ESP_ERROR_CHECK(ret);
     read_config_in_nvs();//Read configuration
+    collection_init();
     control_init();
     printf("Version=%s\n", ver);
     printf("device_ID = %s\n",device_ID);

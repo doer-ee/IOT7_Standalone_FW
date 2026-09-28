@@ -170,10 +170,12 @@ static void control_task(void *arg)
         }
         switch (command.type) {
             case CONTROL_SET_FUNCTION:
-                control_apply_function(&command);
+                if (collection_is_active()) control_fail_command(ESP_ERR_INVALID_STATE);
+                else control_apply_function(&command);
                 break;
             case CONTROL_SET_RANGE:
-                control_apply_range(&command);
+                if (collection_is_active()) control_fail_command(ESP_ERR_INVALID_STATE);
+                else control_apply_range(&command);
                 break;
             case CONTROL_SET_HOLD:
                 control_apply_hold(&command);
@@ -211,6 +213,7 @@ void control_init(void)
 
 esp_err_t control_submit_function(uint8_t function_id, uint32_t *request_id)
 {
+    if (collection_is_active()) return ESP_ERR_INVALID_STATE;
     if (function_id < 1 || function_id > 11) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -223,6 +226,7 @@ esp_err_t control_submit_function(uint8_t function_id, uint32_t *request_id)
 
 esp_err_t control_submit_range(uint8_t range, uint32_t *request_id)
 {
+    if (collection_is_active()) return ESP_ERR_INVALID_STATE;
     if (range != ASW_OFF && !control_range_matches_function(current_fun, range)) {
         return ESP_ERR_INVALID_ARG;
     }

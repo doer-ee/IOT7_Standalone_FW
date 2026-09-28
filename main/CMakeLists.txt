@@ -4,6 +4,7 @@ idf_component_register(SRCS
 "adc_dac.c"
 "wifinet.c"
 "switch_fun.c"
+"collection.c"
 EMBED_TXTFILES "meter.html"
 INCLUDE_DIRS ""
 REQUIRES
@@ -18,4 +19,7 @@ REQUIRES
     freertos
     mdns
     nvs_flash
+    esp_http_client
+    mbedtls
+    spi_flash
     tcpip_adapter)
