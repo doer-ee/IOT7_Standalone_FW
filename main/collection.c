@@ -162,13 +162,16 @@ static void csv_filename(uint32_t session_id, const char *name, char *out, size_
     if (cap == 0) return;
     for (size_t i = 0; name && name[i] && used + 5 < cap; ++i) {
         unsigned char c = (unsigned char)name[i];
-        if (isalnum(c) || c == '-' || c == '_' || c == '.') {
+        bool safe = c >= 0x21 && c <= 0x7e && c != '"' && c != '\\' &&
+                    c != '/' && c != ':' && c != '*' && c != '?' &&
+                    c != '<' && c != '>' && c != '|' && c != ';';
+        if (safe || c == ' ') {
             out[used++] = (char)c;
-        } else if (isspace(c) && used > 0 && out[used - 1] != '_') {
+        } else if (used > 0 && out[used - 1] != '_') {
             out[used++] = '_';
         }
     }
-    while (used > 0 && (out[used - 1] == '_' || out[used - 1] == '.')) used--;
+    while (used > 0 && (out[used - 1] == '_' || out[used - 1] == '.' || out[used - 1] == ' ')) used--;
     if (used == 0) {
         snprintf(out, cap, "collection-%" PRIu32 ".csv", session_id);
         return;
