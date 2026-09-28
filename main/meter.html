@@ -422,14 +422,13 @@
     }
     function prepareContinuation(session, status) {
       if (status.active || session.collecting) { collectionMessage('Stop the active collection before continuing another one.',true); return; }
-      if (!session.settings_known) { collectionMessage('This older collection has no saved length settings and cannot be continued.',true); return; }
       if (session.function_id !== activeFunction) { collectionMessage('Select '+session.function+' mode first, then continue this collection.',true); return; }
       pendingContinuation=session;
       setText('collection_card_title',session.name || ('Collection #'+session.id));
       setText('collection_function',session.function);
       setCollectionInterval(session.interval_ms);
-      setCollectionLength(session.limit_kind,session.target);
-      setCollectionControlsDisabled(true);
+      setCollectionLength(session.settings_known ? session.limit_kind : 0,session.settings_known ? session.target : 60);
+      setCollectionControlsDisabled(false);
       setText('start_collection','Continue Collection');
       setText('stop_collection','Cancel');
       el('start_collection').disabled=false;
@@ -466,7 +465,7 @@
           const actions=document.createElement('div'); actions.className='session-actions';
           const csv=document.createElement('button'); csv.textContent='Download CSV'; csv.onclick=()=>window.location='/api/collection/csv?id='+s.id;
           const send=document.createElement('button'); send.textContent='Send to Telegram'; send.disabled=!settings.telegram_configured; send.title=settings.telegram_configured?'Send CSV':'Configure Telegram in Settings'; send.onclick=async()=>{try{await post('/api/collection/send','id='+s.id);collectionMessage('CSV send queued.')}catch(e){collectionMessage(e.message,true)}};
-          const resume=document.createElement('button'); resume.textContent='Continue'; resume.disabled=!!status.active||!!s.collecting||!s.settings_known||s.function_id!==activeFunction; resume.title=s.collecting?'This collection is already running':!s.settings_known?'This older collection has no saved length settings':s.function_id!==activeFunction?'Select '+s.function+' mode first':'Review and continue this collection'; resume.onclick=()=>prepareContinuation(s,status);
+          const resume=document.createElement('button'); resume.textContent='Continue'; resume.disabled=!!status.active||!!s.collecting||s.function_id!==activeFunction; resume.title=s.collecting?'This collection is already running':s.function_id!==activeFunction?'Select '+s.function+' mode first':s.settings_known?'Review and continue this collection':'Choose interval and length before continuing this older collection'; resume.onclick=()=>prepareContinuation(s,status);
           const remove=document.createElement('button'); remove.textContent='Delete'; remove.disabled=!!s.collecting; remove.onclick=async()=>{if(!confirm('Delete this collection and its saved records?'))return;remove.disabled=true;try{await post('/api/collection/delete','id='+s.id);collectionMessage('Collection deleted.');refreshCollection();}catch(e){remove.disabled=false;collectionMessage(e.message,true)}};
           actions.append(csv,send,resume,remove); row.appendChild(actions); holder.appendChild(row);
         });
@@ -474,8 +473,12 @@
     }
     el('start_collection').addEventListener('click',async()=>{
       if (pendingContinuation) {
-        const session=pendingContinuation; el('start_collection').disabled=true;
-        try { await post('/api/collection/resume','id='+session.id); continuationSessionId=session.id; pendingContinuation=null; setText('start_collection','Continue Collection'); setText('stop_collection','Stop collection'); setCollectionControlsDisabled(true); el('stop_collection').disabled=false; collectionMessage('Collection continued. Mode switching is locked.'); refreshCollection(); }
+        const session=pendingContinuation;
+        const interval=el('collection_interval').value==='custom'?Number(el('custom_interval').value):Number(el('collection_interval').value);
+        const kind=Number(el('collection_limit').value), target=kind?Number(el('collection_target').value):0;
+        if(interval<500||interval>3600000||!Number.isFinite(interval)||kind&&(!target||target>100000000)){collectionMessage('Enter valid continuation settings.',true);return;}
+        el('start_collection').disabled=true;
+        try { await post('/api/collection/update','id='+session.id+'&interval_ms='+interval+'&limit_kind='+kind+'&target='+target); await post('/api/collection/resume','id='+session.id); continuationSessionId=session.id; pendingContinuation=null; setText('start_collection','Continue Collection'); setText('stop_collection','Stop collection'); setCollectionControlsDisabled(true); el('stop_collection').disabled=false; collectionMessage('Collection continued. Mode switching is locked.'); refreshCollection(); }
         catch (e) { el('start_collection').disabled=false; collectionMessage(e.message,true); }
         return;
       }
