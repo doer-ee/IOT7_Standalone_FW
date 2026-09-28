@@ -631,6 +631,7 @@ static esp_err_t collection_status_get(httpd_req_t *req)
 {
     char json[400];
     xSemaphoreTake(col_lock, portMAX_DELAY);
+    if (!storage_ready) scan_storage();
     col_summary_t *s = summary_for(col_cfg.session_id, false);
     uint32_t count = s ? s->count : 0;
     uint32_t used = next_log_sequence > 1 ? next_log_sequence - 1 : 0;
