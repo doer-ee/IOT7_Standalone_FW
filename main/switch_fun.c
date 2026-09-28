@@ -170,11 +170,63 @@ bool switch_range_is_locked(uint8_t *range)
 
 uint8_t K1Set,K1Cnt;
 #define POWER_ON_HOLD_TICKS 5
+#define KEY_DOUBLE_CLICK_WINDOW_US (2000000LL)
+
+/* A short press is held briefly so a second press can be recognized as a
+ * double click.  A lone press keeps its original mark-reading behavior. */
+static bool key_click_pending;
+static int64_t key_first_click_us;
+
+static void key_handle_single_click(void)
+{
+   if (collection_is_active()) {
+      return;
+   }
+   if (net_state == 1) {
+      control_submit_mark(NULL);
+   }
+}
+
+static void key_handle_double_click(void)
+{
+   if (collection_is_active()) {
+      return;
+   }
+
+   esp_err_t err = control_submit_function(8, NULL);
+   if (err == ESP_OK) {
+      ESP_LOGI(SWITCH_FUN, "Double click: continuity mode requested");
+      beep_start(2);
+   } else {
+      ESP_LOGW(SWITCH_FUN, "Double click: continuity mode request failed (%s)",
+               esp_err_to_name(err));
+   }
+}
+
+static void key_process_pending_click(void)
+{
+   if (!key_click_pending) {
+      return;
+   }
+
+   if (collection_is_active()) {
+      key_click_pending = false;
+      return;
+   }
+
+   if ((esp_timer_get_time() - key_first_click_us) > KEY_DOUBLE_CLICK_WINDOW_US) {
+      key_click_pending = false;
+      key_handle_single_click();
+   }
+}
+
 void KeyScan()
 {
 
-		if(gpio_get_level(KEY)==0) 
-		{		
+      key_process_pending_click();
+
+		if(gpio_get_level(KEY)==0)
+		{
          
          if(++K1Cnt==3) 
          {
@@ -204,17 +256,31 @@ void KeyScan()
 			 K1Cnt = 0;
 			 if(K1Set==1)
 			 {
-					K1Set = 0;
-               gpio_set_level(BEEP, 1);
-               vTaskDelay(pdMS_TO_TICKS(100));
-               gpio_set_level(BEEP, 0);
+				 K1Set = 0;
 
-               if(net_state == 1) //Mark the measurement while connected to the local network
-               {
-                  control_submit_mark(NULL);
-               } 
+               if (collection_is_active()) {
+                  key_click_pending = false;
+                  return;
+               }
+
+               int64_t now_us = esp_timer_get_time();
+               if (key_click_pending &&
+                   (now_us - key_first_click_us) <= KEY_DOUBLE_CLICK_WINDOW_US) {
+                  key_click_pending = false;
+                  key_handle_double_click();
+               } else {
+                  if (key_click_pending) {
+                     key_click_pending = false;
+                     key_handle_single_click();
+                  }
+                  key_click_pending = true;
+                  key_first_click_us = now_us;
+                  gpio_set_level(BEEP, 1);
+                  vTaskDelay(pdMS_TO_TICKS(100));
+                  gpio_set_level(BEEP, 0);
+               }
 			 }
-		}   
+		}
 }
 
 uint8_t beep_add=0;
