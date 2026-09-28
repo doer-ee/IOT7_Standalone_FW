@@ -45,6 +45,7 @@ static bool wifi_apply_from_web = false;
 static unsigned int wifi_connect_attempts = 0;
 static unsigned int wifi_disconnect_count = 0;
 static volatile bool ota_upload_in_progress = false;
+static volatile bool ota_reboot_requested = false;
 
 static esp_err_t event_handler2(void *ctx, system_event_t *event);
 static esp_err_t wifi_stack_init_once(void);
@@ -841,15 +842,6 @@ static esp_err_t ota_send_error(httpd_req_t *req, const char *status, int status
     return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
 }
 
-static void ota_reboot_task(void *arg)
-{
-    (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(1200));
-    ESP_LOGI(WIFINET, "OTA update accepted; restarting into the new firmware");
-    esp_restart();
-    vTaskDelete(NULL);
-}
-
 static esp_err_t ota_upload_post_handler(httpd_req_t *req)
 {
     const esp_partition_t *update_partition = NULL;
@@ -951,11 +943,10 @@ static esp_err_t ota_upload_post_handler(httpd_req_t *req)
     ota_upload_in_progress = false;
     httpd_resp_set_status(req, "200 OK");
     httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Connection", "close");
     err = httpd_resp_sendstr(req,
                              "{\"accepted\":true,\"message\":\"Firmware updated. The device will restart shortly.\"}");
-    if (xTaskCreate(ota_reboot_task, "ota_reboot", 2048, NULL, 5, NULL) != pdPASS) {
-        ESP_LOGE(WIFINET, "Failed to create OTA reboot task; power cycle is required");
-    }
+    ota_reboot_requested = true;
     ESP_LOGI(WIFINET, "OTA image written to %s (%u bytes)",
              update_partition->label, (unsigned)req->content_len);
     return err;
@@ -1430,6 +1421,12 @@ void wifinet_task(void *arg)
 
     web_activity_note();
     while (true) {
+        if (ota_reboot_requested) {
+            ota_reboot_requested = false;
+            ESP_LOGI(WIFINET, "OTA response sent; restarting into the new firmware");
+            vTaskDelay(pdMS_TO_TICKS(1500));
+            esp_restart();
+        }
         bool button_wake = false;
         if (xQueueReceive(wifinet_evt_queue, &evt, pdMS_TO_TICKS(1000)) == pdTRUE) {
             if (evt == WIFINET_CONFIG_AP) wifi_config_ap_start();
