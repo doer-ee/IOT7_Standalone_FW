@@ -857,6 +857,7 @@ static esp_err_t ota_upload_post_handler(httpd_req_t *req)
     bool ota_open = false;
     bool image_header_checked = false;
     size_t remaining = 0;
+    uint8_t *buffer = NULL;
     esp_err_t err = ESP_OK;
     const char *error_status = "500 Internal Server Error";
     int error_code = 500;
@@ -892,11 +893,16 @@ static esp_err_t ota_upload_post_handler(httpd_req_t *req)
         goto ota_fail;
     }
     ota_open = true;
+    buffer = malloc(4096);
+    if (buffer == NULL) {
+        error_message = "Not enough memory for the firmware update";
+        err = ESP_ERR_NO_MEM;
+        goto ota_fail;
+    }
     remaining = req->content_len;
 
     while (remaining > 0) {
-        uint8_t buffer[4096];
-        size_t request_size = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+        size_t request_size = remaining < 4096 ? remaining : 4096;
         int received = httpd_req_recv(req, (char *)buffer, request_size);
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
             continue;
@@ -934,6 +940,8 @@ static esp_err_t ota_upload_post_handler(httpd_req_t *req)
         error_message = "Firmware image validation failed";
         goto ota_fail;
     }
+    free(buffer);
+    buffer = NULL;
     err = esp_ota_set_boot_partition(update_partition);
     if (err != ESP_OK) {
         error_message = "Unable to select the new firmware partition";
@@ -953,6 +961,7 @@ static esp_err_t ota_upload_post_handler(httpd_req_t *req)
     return err;
 
 ota_fail:
+    free(buffer);
     if (ota_open) {
         esp_ota_abort(ota_handle);
     }
